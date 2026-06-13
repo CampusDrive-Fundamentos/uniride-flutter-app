@@ -5,6 +5,7 @@ import '../../features/auth/presentation/pages/login_page.dart';
 import '../../features/auth/presentation/pages/role_selection_page.dart';
 import '../../features/auth/presentation/pages/student_registration_page.dart';
 import '../../features/auth/presentation/pages/driver_registration_page.dart';
+import '../../features/auth/presentation/pages/main_dashboard_page.dart'; 
 
 import '../../features/onboarding/presentation/pages/vehicle_form_page.dart';
 import '../../features/onboarding/presentation/pages/link_card_page.dart';
@@ -24,16 +25,12 @@ class AppRouter {
         return MaterialPageRoute(builder: (_) => const DriverRegistrationPage());
         
       case '/register-vehicle':
-        return MaterialPageRoute(builder: (_) => VehicleFormPage());
+        return MaterialPageRoute(builder: (_) => const VehicleFormPage());
       case '/link-card':
-        return MaterialPageRoute(builder: (_) => LinkCardPage());
+        return MaterialPageRoute(builder: (_) => const LinkCardPage());
         
       case '/home':
-        return MaterialPageRoute(
-          builder: (_) => const Scaffold(
-            body: Center(child: Text('Home de UniRide (Próximo Módulo)')),
-          ),
-        );
+        return MaterialPageRoute(builder: (_) => const MainDashboardPage());
       
       default:
         return MaterialPageRoute(
