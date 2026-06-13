@@ -4,8 +4,12 @@ class LoginRequestDto {
 
   LoginRequestDto({required this.email, required this.password});
 
-  Map<String, dynamic> toJson() => {
-    "username": email,
-    "password": password,
-  };
+  Map<String, dynamic> toJson() {
+    String actualUsername = email.contains('@') ? email.split('@')[0] : email;
+
+    return {
+      "username": actualUsername,
+      "password": password,
+    };
+  }
 }
