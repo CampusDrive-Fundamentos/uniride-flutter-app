@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
 
 // Configuración Core
 import 'core/constants/app_colors.dart';
@@ -11,6 +11,7 @@ import 'core/router/app_router.dart';
 import 'features/auth/presentation/blocs/auth_bloc.dart';
 import 'features/onboarding/presentation/blocs/onboarding_bloc.dart';
 import 'features/profile/presentation/blocs/profile_bloc.dart';
+import 'features/routes/presentation/blocs/routes_bloc.dart';
 
 void main() async {
   // 1. Asegurar que los bindings de Flutter estén listos 
@@ -21,11 +22,7 @@ void main() async {
   // (Esto instancia Dio, Repositorios, UseCases y BLoCs)
   await di.init(); 
 
-  // 3. Limpiar sesiones abiertas (Corrección Final solicitada)
-  const secureStorage = FlutterSecureStorage();
-  await secureStorage.deleteAll();
-
-  // 4. Arrancar la aplicación
+  // 3. Arrancar la aplicación
   runApp(const UniRideApp());
 }
 
@@ -46,6 +43,9 @@ class UniRideApp extends StatelessWidget {
         ),
         BlocProvider<ProfileBloc>(
           create: (_) => di.sl<ProfileBloc>(),
+        ),
+        BlocProvider<RoutesBloc>(
+          create: (_) => di.sl<RoutesBloc>(),
         ),
       ],
       child: MaterialApp(

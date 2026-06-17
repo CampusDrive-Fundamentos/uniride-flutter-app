@@ -11,6 +11,10 @@ import '../../features/profile/presentation/pages/profile_page.dart';
 import '../../features/onboarding/presentation/pages/vehicle_form_page.dart';
 import '../../features/onboarding/presentation/pages/link_card_page.dart';
 
+// Routes Pages
+import '../../features/routes/presentation/pages/create_announcement_page.dart';
+import '../../features/routes/presentation/pages/nearby_bookings_page.dart';
+
 class AppRouter {
   static Route<dynamic> generateRoute(RouteSettings settings) {
     switch (settings.name) {
@@ -34,6 +38,18 @@ class AppRouter {
         return MaterialPageRoute(builder: (_) => const MainDashboardPage());
       case '/profile':
         return MaterialPageRoute(builder: (_) => const ProfilePage());
+      
+      case '/create-announcement':
+        return MaterialPageRoute(builder: (_) => const CreateAnnouncementPage());
+      case '/nearby-bookings':
+        final args = settings.arguments as Map<String, dynamic>? ?? {};
+        return MaterialPageRoute(
+          builder: (_) => NearbyBookingsPage(
+            campus: args['campus'] ?? 'MONTERRICO',
+            lat: args['lat'] ?? -12.1210,
+            lng: args['lng'] ?? -77.0290,
+          ),
+        );
       
       default:
         return MaterialPageRoute(
