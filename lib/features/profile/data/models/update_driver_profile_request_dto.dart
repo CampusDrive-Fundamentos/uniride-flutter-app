@@ -1,26 +1,16 @@
-import 'vehicle_dto.dart';
+import '../../../auth/data/models/vehicle_dto.dart';
 
-class DriverSignUpDto {
+class UpdateDriverProfileRequestDto {
   final String firstName;
   final String lastName;
-  final String email;
-  final String password;
   final String phoneNumber;
-  final String dni;
-  final String licenseNumber;
-  final String culCertificate;
   final String cardNumber;
   final VehicleDto vehicle;
 
-  DriverSignUpDto({
+  UpdateDriverProfileRequestDto({
     required this.firstName,
     required this.lastName,
-    required this.email,
-    required this.password,
     required this.phoneNumber,
-    required this.dni,
-    required this.licenseNumber,
-    required this.culCertificate,
     required this.cardNumber,
     required this.vehicle,
   });
@@ -28,12 +18,7 @@ class DriverSignUpDto {
   Map<String, dynamic> toJson() => {
     "firstName": firstName,
     "lastName": lastName,
-    "email": email,
-    "password": password,
     "phoneNumber": phoneNumber,
-    "dni": dni,
-    "licenseNumber": licenseNumber,
-    "culCertificate": culCertificate,
     "cardNumber": cardNumber,
     "vehicle": vehicle.toJson(),
   };

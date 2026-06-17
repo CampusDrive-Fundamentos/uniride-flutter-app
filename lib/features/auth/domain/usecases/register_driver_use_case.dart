@@ -5,10 +5,19 @@ import '../repositories/auth_repository.dart';
 
 class RegisterDriverParams {
   final String username, firstName, lastName, email, password, phone, dni, license, cul;
+  final String cardNumber;
+  final String vehicleType;
+  final String vehicleName;
+  final String vehiclePlate;
+
   RegisterDriverParams({
     required this.username, required this.firstName, required this.lastName,
     required this.email, required this.password, required this.phone,
-    required this.dni, required this.license, required this.cul
+    required this.dni, required this.license, required this.cul,
+    required this.cardNumber,
+    required this.vehicleType,
+    required this.vehicleName,
+    required this.vehiclePlate,
   });
 }
 
@@ -23,6 +32,10 @@ class RegisterDriverUseCase implements UseCase<String, RegisterDriverParams> {
       username: params.username, firstName: params.firstName, lastName: params.lastName,
       email: params.email, password: params.password, phoneNumber: params.phone,
       dni: params.dni, licenseNumber: params.license, culCertificate: params.cul,
+      cardNumber: params.cardNumber,
+      vehicleType: params.vehicleType,
+      vehicleName: params.vehicleName,
+      vehiclePlate: params.vehiclePlate,
     );
   }
 }

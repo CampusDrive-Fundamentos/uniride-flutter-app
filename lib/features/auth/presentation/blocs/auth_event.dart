@@ -13,7 +13,6 @@ class LoginSubmitted extends AuthEvent {
   const LoginSubmitted({required this.email, required this.password});
 }
 
-// FALTABA ESTE EVENTO
 class RegisterStudentEvent extends AuthEvent {
   final String username, firstName, lastName, email, password, phoneNumber, universityName;
   final File tiuPhoto;
@@ -27,10 +26,18 @@ class RegisterStudentEvent extends AuthEvent {
 
 class RegisterDriverEvent extends AuthEvent {
   final String username, firstName, lastName, email, password, phoneNumber, dni, licenseNumber, culCertificate;
+  final String cardNumber;
+  final String vehicleType;
+  final String vehicleName;
+  final String vehiclePlate;
 
   const RegisterDriverEvent({
     required this.username, required this.firstName, required this.lastName,
     required this.email, required this.password, required this.phoneNumber,
     required this.dni, required this.licenseNumber, required this.culCertificate,
+    required this.cardNumber,
+    required this.vehicleType,
+    required this.vehicleName,
+    required this.vehiclePlate,
   });
 }

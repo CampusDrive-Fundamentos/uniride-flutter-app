@@ -6,6 +6,7 @@ import '../../features/auth/presentation/pages/role_selection_page.dart';
 import '../../features/auth/presentation/pages/student_registration_page.dart';
 import '../../features/auth/presentation/pages/driver_registration_page.dart';
 import '../../features/auth/presentation/pages/main_dashboard_page.dart'; 
+import '../../features/profile/presentation/pages/profile_page.dart';
 
 import '../../features/onboarding/presentation/pages/vehicle_form_page.dart';
 import '../../features/onboarding/presentation/pages/link_card_page.dart';
@@ -31,6 +32,8 @@ class AppRouter {
         
       case '/home':
         return MaterialPageRoute(builder: (_) => const MainDashboardPage());
+      case '/profile':
+        return MaterialPageRoute(builder: (_) => const ProfilePage());
       
       default:
         return MaterialPageRoute(

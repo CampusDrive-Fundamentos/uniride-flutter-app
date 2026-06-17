@@ -21,7 +21,11 @@ class _DriverRegistrationPageState extends State<DriverRegistrationPage> {
   final _phoneCtrl = TextEditingController();
   final _dniCtrl = TextEditingController();
   final _licenseCtrl = TextEditingController();
-  final _culCtrl = TextEditingController(); // Código CUL
+  final _culCtrl = TextEditingController();
+  final _cardCtrl = TextEditingController();
+  final _vTypeCtrl = TextEditingController();
+  final _vNameCtrl = TextEditingController();
+  final _vPlateCtrl = TextEditingController();
 
   @override
   Widget build(BuildContext context) {
@@ -37,8 +41,12 @@ class _DriverRegistrationPageState extends State<DriverRegistrationPage> {
         listener: (context, state) {
           if (state is AuthAuthenticated) {
             Navigator.pushReplacementNamed(context, '/register-vehicle');
+          } else if (state is AuthRegistrationSuccess) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(state.message), backgroundColor: Colors.green),
+            );
+            Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
           } else if (state is AuthError) {
-            // US17 Escenario 2: Fallo -> Notificación
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(content: Text(state.message), backgroundColor: AppColors.error),
             );
@@ -50,7 +58,10 @@ class _DriverRegistrationPageState extends State<DriverRegistrationPage> {
             child: Form(
               key: _formKey,
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  const Text('Datos Personales', style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold, fontSize: 18)),
+                  const SizedBox(height: 16),
                   _buildTextField(_nameCtrl, 'Nombres', false),
                   const SizedBox(height: 16),
                   _buildTextField(_lastNameCtrl, 'Apellidos', false),
@@ -69,11 +80,32 @@ class _DriverRegistrationPageState extends State<DriverRegistrationPage> {
                   const SizedBox(height: 16),
                   _buildTextField(_licenseCtrl, 'N° Licencia de Conducir', false),
                   const SizedBox(height: 16),
-                  _buildTextField(_culCtrl, 'Código Certificado Único Laboral (CUL)', false),
+                  _buildTextField(_culCtrl, 'Código CUL', false),
+                  const SizedBox(height: 16),
+                  _buildTextField(_cardCtrl, 'N° de Tarjeta Bancaria', false, isNumber: true),
+
+                  const SizedBox(height: 24),
+                  const Text('Datos del Vehículo', style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold, fontSize: 18)),
+                  const SizedBox(height: 16),
+                  _buildTextField(_vTypeCtrl, 'Tipo (Auto, Camioneta, etc.)', false),
+                  const SizedBox(height: 16),
+                  _buildTextField(_vNameCtrl, 'Marca / Modelo', false),
+                  const SizedBox(height: 16),
+                  _buildTextField(
+                    _vPlateCtrl, 
+                    'Placa (Ej: ABC-123)', 
+                    false,
+                    validator: (v) {
+                      if (v == null || v.isEmpty) return 'Requerido';
+                      final regex = RegExp(r'^[A-Za-z]{3}-?[A-Za-z0-9]{3}$');
+                      if (!regex.hasMatch(v)) return 'Formato sugerido: XXX-000';
+                      return null;
+                    }
+                  ),
                   
                   const SizedBox(height: 32),
                   if (state is AuthLoading)
-                    const CircularProgressIndicator(color: AppColors.primary)
+                    const Center(child: CircularProgressIndicator(color: AppColors.primary))
                   else
                     ElevatedButton(
                       style: ElevatedButton.styleFrom(
@@ -89,10 +121,14 @@ class _DriverRegistrationPageState extends State<DriverRegistrationPage> {
                             email: _emailCtrl.text, password: _passwordCtrl.text,
                             phoneNumber: _phoneCtrl.text, dni: _dniCtrl.text,
                             licenseNumber: _licenseCtrl.text, culCertificate: _culCtrl.text,
+                            cardNumber: _cardCtrl.text,
+                            vehicleType: _vTypeCtrl.text,
+                            vehicleName: _vNameCtrl.text,
+                            vehiclePlate: _vPlateCtrl.text,
                           ));
                         }
                       },
-                      child: const Text('Continuar a Vehículo', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                      child: const Text('Completar Registro', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
                     ),
                 ],
               ),
@@ -103,13 +139,13 @@ class _DriverRegistrationPageState extends State<DriverRegistrationPage> {
     );
   }
 
-  Widget _buildTextField(TextEditingController controller, String label, bool obscure, {bool isNumber = false}) {
+  Widget _buildTextField(TextEditingController controller, String label, bool obscure, {bool isNumber = false, String? Function(String?)? validator}) {
     return TextFormField(
       controller: controller,
       obscureText: obscure,
       keyboardType: isNumber ? TextInputType.number : TextInputType.text,
       style: const TextStyle(color: AppColors.textPrimary),
-      validator: (v) => v!.isEmpty ? 'Requerido' : null,
+      validator: validator ?? (v) => v!.isEmpty ? 'Requerido' : null,
       decoration: InputDecoration(
         labelText: label,
         labelStyle: const TextStyle(color: AppColors.textSecondary),

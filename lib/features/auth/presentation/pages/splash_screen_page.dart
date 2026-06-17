@@ -18,16 +18,9 @@ class _SplashScreenPageState extends State<SplashScreenPage> {
 
   Future<void> _checkExistingSession() async {
     await Future.delayed(const Duration(seconds: 2));
-    const storage = FlutterSecureStorage();
-    final token = await storage.read(key: 'jwt_token');
-
+    // Siempre redirigir al login al iniciar el programa, según requerimiento.
     if (!mounted) return;
-
-    if (token != null) {
-      Navigator.pushReplacementNamed(context, '/home');
-    } else {
-      Navigator.pushReplacementNamed(context, '/login');
-    }
+    Navigator.pushReplacementNamed(context, '/login');
   }
 
   @override

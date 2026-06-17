@@ -1,3 +1,3 @@
 class Env {
-  static const String baseUrl = 'https://uniride-iam-service.onrender.com';
+  static const String baseUrl = 'http://localhost:8081/swagger-ui/index.html';
 }

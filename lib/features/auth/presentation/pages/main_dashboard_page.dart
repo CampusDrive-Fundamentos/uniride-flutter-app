@@ -1,49 +1,17 @@
 import 'package:flutter/material.dart';
-import '../../../../core/constants/app_colors.dart';
-import '../../../profile/presentation/pages/profile_page.dart';
+import '../../../../core/widgets/custom_drawer.dart';
 
-class MainDashboardPage extends StatefulWidget {
+class MainDashboardPage extends StatelessWidget {
   const MainDashboardPage({super.key});
-
-  @override
-  State<MainDashboardPage> createState() => _MainDashboardPageState();
-}
-
-class _MainDashboardPageState extends State<MainDashboardPage> {
-  int _currentIndex = 0;
-
-  final List<Widget> _pages = [
-    const _HomePlaceholder(), 
-    const ProfilePage(),      
-  ];
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: _pages[_currentIndex],
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _currentIndex,
-        onTap: (index) {
-          setState(() {
-            _currentIndex = index;
-          });
-        },
-        backgroundColor: AppColors.surface,
-        selectedItemColor: AppColors.primary, 
-        unselectedItemColor: Colors.grey,
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.map_outlined),
-            activeIcon: Icon(Icons.map),
-            label: 'Viajes',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.person_outline),
-            activeIcon: Icon(Icons.person),
-            label: 'Mi Perfil',
-          ),
-        ],
+      appBar: AppBar(
+        title: const Text('UniRide'),
       ),
+      drawer: const CustomDrawer(),
+      body: const _HomePlaceholder(),
     );
   }
 }

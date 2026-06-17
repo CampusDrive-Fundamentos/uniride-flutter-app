@@ -15,26 +15,16 @@ class AuthApiService {
   }
 
   Future<Response> registerStudent(StudentSignUpDto dto) async {
-    String base64Image = "foto_simulada_para_tb2.jpg";
-
-    Map<String, dynamic> payload = {
-      "username": dto.username,
-      "firstName": dto.firstName,
-      "lastName": dto.lastName,
-      "email": dto.email,
-      "password": dto.password,
-      "phoneNumber": dto.phoneNumber,
-      "universityName": dto.universityName,
-      "tiuPhoto": base64Image, 
-    };
-
     return await _dio.post(
       ApiConstants.registerStudent, 
-      data: payload,
+      data: dto.toJson(),
     );
   }
 
   Future<Response> registerDriver(DriverSignUpDto dto) async {
-    return await _dio.post(ApiConstants.registerDriver, data: dto.toJson());
+    return await _dio.post(
+      ApiConstants.registerDriver, 
+      data: dto.toJson(),
+    );
   }
 }

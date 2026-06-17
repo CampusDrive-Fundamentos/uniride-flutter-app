@@ -15,5 +15,9 @@ abstract class AuthRepository {
     required String username, required String firstName, required String lastName,
     required String email, required String password, required String phoneNumber,
     required String dni, required String licenseNumber, required String culCertificate,
+    required String cardNumber,
+    required String vehicleType,
+    required String vehicleName,
+    required String vehiclePlate,
   });
 }

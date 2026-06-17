@@ -48,6 +48,11 @@ class _StudentRegistrationPageState extends State<StudentRegistrationPage> {
         listener: (context, state) {
           if (state is AuthAuthenticated) {
             Navigator.pushReplacementNamed(context, '/home');
+          } else if (state is AuthRegistrationSuccess) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(state.message), backgroundColor: Colors.green),
+            );
+            Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
           } else if (state is AuthError) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(content: Text(state.message), backgroundColor: AppColors.error),

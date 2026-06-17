@@ -7,6 +7,7 @@ import '../../domain/repositories/auth_repository.dart';
 import '../services/auth_api_service.dart';
 import '../models/student_signup_dto.dart';
 import '../models/driver_signup_dto.dart';
+import '../models/vehicle_dto.dart';
 
 class AuthRepositoryImpl implements AuthRepository {
   final AuthApiService apiService;
@@ -22,12 +23,9 @@ class AuthRepositoryImpl implements AuthRepository {
       await secureStorage.write(key: 'jwt_token', value: token);
       return Right(token);
     } on DioException catch (e) {
-      if (e.response?.statusCode == 401 || e.response?.statusCode == 403) {
-        return const Left(ServerFailure('Credenciales incorrectas.'));
-      }
-      return Left(ServerFailure(e.response?.data['message'] ?? 'Error al conectar con el servidor.'));
+      return Left(ServerFailure(_extractMessage(e)));
     } catch (e) {
-      return Left(ServerFailure('Ocurrió un error inesperado.'));
+      return const Left(ServerFailure('Ocurrió un error inesperado.'));
     }
   }
 
@@ -38,39 +36,22 @@ class AuthRepositoryImpl implements AuthRepository {
     required String universityName, required File tiuPhoto,
   }) async {
     try {
+      // Nota: El contrato nuevo pide String para tiuPhoto (puede ser base64)
       final dto = StudentSignUpDto(
-        username: username, firstName: firstName, lastName: lastName,
-        email: email, password: password, phoneNumber: phoneNumber,
-        universityName: universityName, tiuPhoto: tiuPhoto,
+        firstName: firstName, 
+        lastName: lastName,
+        email: email, 
+        password: password, 
+        phoneNumber: phoneNumber,
+        universityName: universityName, 
+        tiuPhoto: "base64_simulated_for_contract", 
       );
       
       final response = await apiService.registerStudent(dto);
-      
-      final token = response.data['token'];
-      await secureStorage.write(key: 'jwt_token', value: token);
-      return Right(token);
+      return Right(response.data['message'] ?? 'Registro exitoso.');
     } on DioException catch (e) {
-      print("====================================");
-      print("Error de Red (DioException):");
-      print("Tipo de DioException: ${e.type}"); 
-      print("Error Interno: ${e.error}");       
-      print("Código de estado HTTP: ${e.response?.statusCode}");
-      print("Cuerpo de respuesta (Data): ${e.response?.data}");
-      print("====================================");
-
-      if (e.response?.statusCode == 409) return const Left(ServerFailure('El usuario o correo ya existe.'));
-      
-      String errorMessage = 'Error en el registro del estudiante.';
-      if (e.response?.data != null && e.response?.data is Map) {
-        errorMessage = e.response?.data['message'] ?? errorMessage;
-      }
-      
-      return Left(ServerFailure(errorMessage));
+      return Left(ServerFailure(_extractMessage(e)));
     } catch (e) {
-      print("====================================");
-      print("Error Inesperado en Flutter:");
-      print(e.toString());
-      print("====================================");
       return const Left(ServerFailure('Ocurrió un error inesperado al procesar los datos.'));
     }
   }
@@ -80,21 +61,42 @@ class AuthRepositoryImpl implements AuthRepository {
     required String username, required String firstName, required String lastName,
     required String email, required String password, required String phoneNumber,
     required String dni, required String licenseNumber, required String culCertificate,
+    required String cardNumber,
+    required String vehicleType,
+    required String vehicleName,
+    required String vehiclePlate,
   }) async {
     try {
       final dto = DriverSignUpDto(
-        username: username, firstName: firstName, lastName: lastName,
-        email: email, password: password, phoneNumber: phoneNumber,
-        dni: dni, licenseNumber: licenseNumber, culCertificate: culCertificate,
+        firstName: firstName, 
+        lastName: lastName,
+        email: email, 
+        password: password, 
+        phoneNumber: phoneNumber,
+        dni: dni, 
+        licenseNumber: licenseNumber, 
+        culCertificate: culCertificate,
+        cardNumber: cardNumber,
+        vehicle: VehicleDto(
+          type: vehicleType,
+          name: vehicleName,
+          licenseNumber: vehiclePlate,
+        ),
       );
       
       final response = await apiService.registerDriver(dto);
-      final token = response.data['token'];
-      await secureStorage.write(key: 'jwt_token', value: token);
-      return Right(token);
+      return Right(response.data['message'] ?? 'Registro exitoso.');
     } on DioException catch (e) {
-      if (e.response?.statusCode == 409) return const Left(ServerFailure('El conductor o correo ya existe.'));
-      return Left(ServerFailure(e.response?.data['message'] ?? 'Error en el registro del conductor.'));
+      return Left(ServerFailure(_extractMessage(e)));
+    } catch (e) {
+      return const Left(ServerFailure('Error inesperado al registrar conductor.'));
     }
+  }
+
+  String _extractMessage(DioException e) {
+    if (e.response?.data != null && e.response?.data is Map) {
+      return e.response?.data['message'] ?? 'Error del servidor.';
+    }
+    return 'Error al conectar con el servidor.';
   }
 }

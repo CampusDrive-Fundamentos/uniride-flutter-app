@@ -24,6 +24,8 @@ import '../../features/profile/data/services/profile_api_service.dart';
 import '../../features/profile/data/repositories/profile_repository_impl.dart';
 import '../../features/profile/domain/repositories/profile_repository.dart';
 import '../../features/profile/domain/usecases/get_current_user_use_case.dart';
+import '../../features/profile/domain/usecases/update_student_profile_use_case.dart';
+import '../../features/profile/domain/usecases/update_driver_profile_use_case.dart';
 import '../../features/profile/presentation/blocs/profile_bloc.dart';
 
 final sl = GetIt.instance;
@@ -64,6 +66,8 @@ Future<void> init() async {
   sl.registerLazySingleton(() => LinkPaymentCardUseCase(sl()));
   
   sl.registerLazySingleton(() => GetCurrentUserUseCase(sl()));
+  sl.registerLazySingleton(() => UpdateStudentProfileUseCase(sl()));
+  sl.registerLazySingleton(() => UpdateDriverProfileUseCase(sl()));
 
   sl.registerFactory(() => AuthBloc(
         loginUseCase: sl(),
@@ -76,5 +80,9 @@ Future<void> init() async {
         linkPaymentCardUseCase: sl(),
       ));
       
-  sl.registerFactory(() => ProfileBloc(sl()));
+  sl.registerFactory(() => ProfileBloc(
+        getCurrentUserUseCase: sl(),
+        updateStudentUseCase: sl(),
+        updateDriverUseCase: sl(),
+      ));
 }

@@ -41,7 +41,6 @@ class _LinkCardPageState extends State<LinkCardPage> {
       body: BlocConsumer<OnboardingBloc, OnboardingState>(
         listener: (context, state) {
           if (state is CardLinkedSuccess) {
-            // US27 completada: El conductor finalizó su onboarding y entra a la app
             Navigator.pushReplacementNamed(context, '/home');
           } else if (state is OnboardingFailure) {
             ScaffoldMessenger.of(context).showSnackBar(

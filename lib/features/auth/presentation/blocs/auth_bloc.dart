@@ -34,7 +34,7 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       );
       result.fold(
         (failure) => emit(AuthError(failure.message)),
-        (token) => emit(AuthAuthenticated(token)),
+        (message) => emit(AuthRegistrationSuccess(message)),
       );
     });
 
@@ -44,10 +44,14 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
         username: event.username, firstName: event.firstName, lastName: event.lastName,
         email: event.email, password: event.password, phone: event.phoneNumber,
         dni: event.dni, license: event.licenseNumber, cul: event.culCertificate,
+        cardNumber: event.cardNumber,
+        vehicleType: event.vehicleType,
+        vehicleName: event.vehicleName,
+        vehiclePlate: event.vehiclePlate,
       ));
       result.fold(
         (failure) => emit(AuthError(failure.message)),
-        (token) => emit(AuthAuthenticated(token)),
+        (message) => emit(AuthRegistrationSuccess(message)),
       );
     });
   }

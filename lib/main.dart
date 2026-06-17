@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 // Configuración Core
 import 'core/constants/app_colors.dart';
@@ -20,7 +21,11 @@ void main() async {
   // (Esto instancia Dio, Repositorios, UseCases y BLoCs)
   await di.init(); 
 
-  // 3. Arrancar la aplicación
+  // 3. Limpiar sesiones abiertas (Corrección Final solicitada)
+  const secureStorage = FlutterSecureStorage();
+  await secureStorage.deleteAll();
+
+  // 4. Arrancar la aplicación
   runApp(const UniRideApp());
 }
 
