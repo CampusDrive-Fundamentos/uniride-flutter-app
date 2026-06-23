@@ -1,11 +1,12 @@
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:latlong2/latlong.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../blocs/routes_bloc.dart';
 import '../blocs/routes_event.dart';
 import '../blocs/routes_state.dart';
 import '../../domain/entities/booking_entity.dart';
+import 'map_picker_page.dart';
 
 class NearbyBookingsPage extends StatefulWidget {
   final String campus;
@@ -26,10 +27,14 @@ class NearbyBookingsPage extends StatefulWidget {
 class _NearbyBookingsPageState extends State<NearbyBookingsPage> with SingleTickerProviderStateMixin {
   late AnimationController _scannerController;
   final _pickupAddressController = TextEditingController(text: 'Mi ubicación actual');
+  double? _pickupLat;
+  double? _pickupLng;
 
   @override
   void initState() {
     super.initState();
+    _pickupLat = widget.lat;
+    _pickupLng = widget.lng;
     _scannerController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 3),
@@ -56,6 +61,57 @@ class _NearbyBookingsPageState extends State<NearbyBookingsPage> with SingleTick
         );
   }
 
+  Future<void> _openMapPicker(StateSetter setModalState) async {
+    final LatLng initialCenter = LatLng(_pickupLat ?? widget.lat, _pickupLng ?? widget.lng);
+    final LatLng? result = await Navigator.push<LatLng>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => MapPickerPage(initialCenter: initialCenter),
+      ),
+    );
+
+    if (result != null) {
+      setState(() {
+        _pickupLat = result.latitude;
+        _pickupLng = result.longitude;
+      });
+      setModalState(() {
+        _pickupAddressController.text = 'Parada seleccionada en el mapa';
+      });
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('¡Parada seleccionada en el mapa con éxito!'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _startJoinFlow(BuildContext context, BookingEntity booking) async {
+    final LatLng initialCenter = LatLng(_pickupLat ?? widget.lat, _pickupLng ?? widget.lng);
+    final LatLng? result = await Navigator.push<LatLng>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => MapPickerPage(initialCenter: initialCenter),
+      ),
+    );
+
+    if (result != null) {
+      setState(() {
+        _pickupLat = result.latitude;
+        _pickupLng = result.longitude;
+        _pickupAddressController.text = 'Parada seleccionada en el mapa';
+      });
+
+      if (!context.mounted) return;
+      _showJoinModal(context, booking);
+    }
+  }
+
   void _showJoinModal(BuildContext context, BookingEntity booking) {
     showModalBottomSheet(
       context: context,
@@ -65,70 +121,81 @@ class _NearbyBookingsPageState extends State<NearbyBookingsPage> with SingleTick
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (context) {
-        return Padding(
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.of(context).viewInsets.bottom,
-            top: 24,
-            left: 24,
-            right: 24,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Text(
-                'Confirmar Parada de Encuentro',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
+        return StatefulBuilder(
+          builder: (BuildContext modalContext, StateSetter setModalState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom,
+                top: 24,
+                left: 24,
+                right: 24,
               ),
-              const SizedBox(height: 8),
-              const Text(
-                'Indica la dirección exacta donde te recogerá el conductor. Debe estar en el camino establecido.',
-                style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
-              ),
-              const SizedBox(height: 20),
-              
-              TextFormField(
-                controller: _pickupAddressController,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(
-                  labelText: 'Dirección de Recogida',
-                  prefixIcon: Icon(Icons.pin_drop, color: AppColors.primary),
-                ),
-              ),
-              const SizedBox(height: 24),
-
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.pop(context); // Cerrar bottom sheet
-                  
-                  // Lanzar evento para unirse
-                  this.context.read<RoutesBloc>().add(
-                        JoinBookingEvent(
-                          bookingId: booking.id,
-                          lat: widget.lat,
-                          lng: widget.lng,
-                          address: _pickupAddressController.text,
-                        ),
-                      );
-                },
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                ),
-                child: const Text(
-                  'Confirmar y Unirse',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    'Confirmar Parada de Encuentro',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
-                ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Indica la dirección exacta donde te recogerá el conductor. Debe estar en el camino establecido.',
+                    style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+                  ),
+                  const SizedBox(height: 20),
+                  
+                  TextFormField(
+                    controller: _pickupAddressController,
+                    style: const TextStyle(color: Colors.white),
+                    readOnly: true,
+                    onTap: () => _openMapPicker(setModalState),
+                    decoration: InputDecoration(
+                      labelText: 'Dirección de Recogida',
+                      prefixIcon: const Icon(Icons.pin_drop, color: AppColors.primary),
+                      suffixIcon: IconButton(
+                        icon: const Icon(Icons.map, color: AppColors.primary),
+                        onPressed: () => _openMapPicker(setModalState),
+                        tooltip: 'Seleccionar en el mapa',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+
+                  ElevatedButton(
+                    onPressed: () {
+                      Navigator.pop(context); // Cerrar bottom sheet
+                      
+                      // Lanzar evento para unirse
+                      this.context.read<RoutesBloc>().add(
+                            JoinBookingEvent(
+                              bookingId: booking.id,
+                              lat: _pickupLat ?? widget.lat,
+                              lng: _pickupLng ?? widget.lng,
+                              address: _pickupAddressController.text,
+                            ),
+                          );
+                    },
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                    ),
+                    child: const Text(
+                      'Confirmar y Unirse',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                ],
               ),
-              const SizedBox(height: 24),
-            ],
-          ),
+            );
+          },
         );
       },
     );
@@ -514,7 +581,7 @@ class _NearbyBookingsPageState extends State<NearbyBookingsPage> with SingleTick
                             SizedBox(
                               width: double.infinity,
                               child: ElevatedButton(
-                                onPressed: () => _showJoinModal(context, booking),
+                                onPressed: () => _startJoinFlow(context, booking),
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: AppColors.primary,
                                   padding: const EdgeInsets.symmetric(vertical: 12),

@@ -2,6 +2,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../domain/usecases/create_route_and_booking_use_case.dart';
 import '../../domain/usecases/search_nearby_bookings_use_case.dart';
 import '../../domain/usecases/join_booking_use_case.dart';
+import '../../domain/repositories/routes_repository.dart';
 import 'routes_event.dart';
 import 'routes_state.dart';
 
@@ -9,11 +10,13 @@ class RoutesBloc extends Bloc<RoutesEvent, RoutesState> {
   final CreateRouteAndBookingUseCase createRouteAndBookingUseCase;
   final SearchNearbyBookingsUseCase searchNearbyBookingsUseCase;
   final JoinBookingUseCase joinBookingUseCase;
+  final RoutesRepository repository;
 
   RoutesBloc({
     required this.createRouteAndBookingUseCase,
     required this.searchNearbyBookingsUseCase,
     required this.joinBookingUseCase,
+    required this.repository,
   }) : super(RoutesInitial()) {
 
     on<SearchNearbyBookingsEvent>((event, emit) async {
@@ -60,6 +63,85 @@ class RoutesBloc extends Bloc<RoutesEvent, RoutesState> {
       result.fold(
         (failure) => emit(RoutesError(failure.message)),
         (booking) => emit(JoinedBookingSuccess(booking)),
+      );
+    });
+
+    on<LoadCurrentBookingEvent>((event, emit) async {
+      emit(RoutesLoading());
+      final result = await repository.getCurrentBooking();
+      result.fold(
+        (failure) => emit(CurrentBookingEmpty()),
+        (booking) => emit(CurrentBookingLoaded(booking)),
+      );
+    });
+
+    on<LockAndPublishBookingEvent>((event, emit) async {
+      emit(RoutesLoading());
+      final lockResult = await repository.lockBooking(bookingId: event.bookingId);
+      await lockResult.fold(
+        (failure) async => emit(RoutesError(failure.message)),
+        (lockedBooking) async {
+          double amount = 10.0 + (event.totalDistanceKm * 1.5);
+          final tripResult = await repository.createTrip(
+            bookingId: event.bookingId,
+            routeId: event.routeId,
+            campus: event.campus,
+            securityCode: event.securityCode,
+            totalAmount: amount,
+            passengerIds: event.passengerIds,
+          );
+          tripResult.fold(
+            (failure) => emit(RoutesError(failure.message)),
+            (_) => emit(LockAndPublishSuccess(lockedBooking)),
+          );
+        },
+      );
+    });
+
+    on<LeaveBookingEvent>((event, emit) async {
+      emit(RoutesLoading());
+      final result = await repository.leaveBooking(
+        bookingId: event.bookingId,
+        lat: event.lat,
+        lng: event.lng,
+      );
+      result.fold(
+        (failure) => emit(RoutesError(failure.message)),
+        (_) => emit(LeaveBookingSuccess()),
+      );
+    });
+
+    on<CancelBookingEvent>((event, emit) async {
+      emit(RoutesLoading());
+      final result = await repository.cancelBooking(bookingId: event.bookingId);
+      result.fold(
+        (failure) => emit(RoutesError(failure.message)),
+        (_) => emit(CancelBookingSuccess()),
+      );
+    });
+
+    on<ConfirmArrivalEvent>((event, emit) async {
+      emit(RoutesLoading());
+      final result = await repository.confirmArrival(
+        tripId: event.tripId,
+        passengerId: event.passengerId,
+      );
+      result.fold(
+        (failure) => emit(RoutesError(failure.message)),
+        (_) => emit(ConfirmArrivalSuccess()),
+      );
+    });
+
+    on<UpdatePassengerPaymentEvent>((event, emit) async {
+      emit(RoutesLoading());
+      final result = await repository.updatePayment(
+        bookingId: event.bookingId,
+        passengerId: event.passengerId,
+        method: event.method,
+      );
+      result.fold(
+        (failure) => emit(RoutesError(failure.message)),
+        (booking) => emit(UpdatePaymentSuccess(booking)),
       );
     });
   }

@@ -38,6 +38,8 @@ dependencies:
   dartz: ^0.10.1            # Para el manejo de Either (Clean Architecture)
   flutter_secure_storage: ^9.0.0  # Para guardar el JWT
   image_picker: ^1.0.4      # Para tomar la foto del TIU/CUL
+  flutter_map: ^8.0.0       # Para mapas interactivos reales
+  latlong2: ^0.9.1          # Para coordenadas geográficas (LatLng)
 
 dev_dependencies:
   flutter_test:

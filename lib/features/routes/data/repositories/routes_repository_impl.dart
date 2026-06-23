@@ -159,27 +159,138 @@ class RoutesRepositoryImpl implements RoutesRepository {
   }
 
   @override
-  Future<Either<Failure, List<RouteEntity>>> getRoutesByCampus({
-    required String campus,
-  }) async {
+  Future<Either<Failure, BookingEntity>> getCurrentBooking() async {
     try {
-      final response = await apiService.getRoutesByCampus(campus: campus);
+      final response = await apiService.getCurrentBooking();
       if (response.statusCode == 200) {
-        final parsedList = _parseList(response.data);
-        final list = parsedList
-            .map((r) => RouteModel.fromJson(r))
-            .toList();
-        return Right(list);
+        final parsedMap = _parseMap(response.data);
+        final bookingModel = BookingModel.fromJson(parsedMap);
+        return Right(bookingModel);
       }
-      return const Left(ServerFailure('Error al obtener rutas del campus.'));
+      return const Left(ServerFailure('No se encontró una reserva activa.'));
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) {
+        return const Left(ServerFailure('No tienes una reserva activa.'));
+      }
+      return Left(ServerFailure(
+        e.response?.data is Map 
+            ? (e.response?.data['message'] ?? 'Error al obtener reserva actual.')
+            : 'Error al obtener reserva actual.',
+      ));
+    } catch (e) {
+      return const Left(ServerFailure('Error inesperado al obtener reserva actual.'));
+    }
+  }
+
+  @override
+  Future<Either<Failure, BookingEntity>> lockBooking({required int bookingId}) async {
+    try {
+      final response = await apiService.lockBooking(bookingId: bookingId);
+      if (response.statusCode == 200) {
+        final parsedMap = _parseMap(response.data);
+        final bookingModel = BookingModel.fromJson(parsedMap);
+        return Right(bookingModel);
+      }
+      return const Left(ServerFailure('No se pudo bloquear la reserva.'));
     } on DioException catch (e) {
       return Left(ServerFailure(
         e.response?.data is Map 
-            ? (e.response?.data['message'] ?? 'Error de red al obtener rutas.')
-            : 'Error de red al obtener rutas.',
+            ? (e.response?.data['message'] ?? 'Error al bloquear la reserva.')
+            : 'Error al bloquear la reserva.',
       ));
     } catch (e) {
-      return const Left(ServerFailure('Ocurrió un error inesperado al obtener rutas.'));
+      return const Left(ServerFailure('Error inesperado al bloquear la reserva.'));
+    }
+  }
+
+  @override
+  Future<Either<Failure, BookingEntity>> leaveBooking({
+    required int bookingId,
+    required double lat,
+    required double lng,
+  }) async {
+    try {
+      final response = await apiService.leaveBooking(bookingId: bookingId, lat: lat, lng: lng);
+      if (response.statusCode == 200) {
+        final parsedMap = _parseMap(response.data);
+        final bookingModel = BookingModel.fromJson(parsedMap);
+        return Right(bookingModel);
+      }
+      return const Left(ServerFailure('No se pudo salir del grupo de viaje.'));
+    } on DioException catch (e) {
+      return Left(ServerFailure(
+        e.response?.data is Map 
+            ? (e.response?.data['message'] ?? 'Error de red al salir del grupo.')
+            : 'Error de red al salir del grupo.',
+      ));
+    } catch (e) {
+      return const Left(ServerFailure('Error inesperado al salir del grupo.'));
+    }
+  }
+
+  @override
+  Future<Either<Failure, void>> cancelBooking({required int bookingId}) async {
+    try {
+      final response = await apiService.cancelBooking(bookingId: bookingId);
+      if (response.statusCode == 204 || response.statusCode == 200 || response.statusCode == 201) {
+        return const Right(null);
+      }
+      return const Left(ServerFailure('No se pudo cancelar el grupo de viaje.'));
+    } on DioException catch (e) {
+      return Left(ServerFailure(
+        e.response?.data is Map 
+            ? (e.response?.data['message'] ?? 'Error de red al cancelar el grupo.')
+            : 'Error de red al cancelar el grupo.',
+      ));
+    } catch (e) {
+      return const Left(ServerFailure('Error inesperado al cancelar el grupo.'));
+    }
+  }
+
+  @override
+  Future<Either<Failure, void>> confirmArrival({
+    required int tripId,
+    required int passengerId,
+  }) async {
+    try {
+      final response = await apiService.confirmArrival(tripId: tripId, passengerId: passengerId);
+      if (response.statusCode == 200) {
+        return const Right(null);
+      }
+      return const Left(ServerFailure('No se pudo confirmar la llegada.'));
+    } on DioException catch (e) {
+      return Left(ServerFailure(
+        e.response?.data is Map 
+            ? (e.response?.data['message'] ?? 'Error al confirmar llegada.')
+            : 'Error al confirmar llegada.',
+      ));
+    } catch (e) {
+      return const Left(ServerFailure('Error inesperado al confirmar llegada.'));
+    }
+  }
+
+  @override
+  Future<Either<Failure, BookingEntity>> updatePayment({
+    required int bookingId,
+    required int passengerId,
+    required String method,
+  }) async {
+    try {
+      final response = await apiService.updatePayment(bookingId: bookingId, passengerId: passengerId, method: method);
+      if (response.statusCode == 200) {
+        final parsedMap = _parseMap(response.data);
+        final bookingModel = BookingModel.fromJson(parsedMap);
+        return Right(bookingModel);
+      }
+      return const Left(ServerFailure('No se pudo actualizar el pago.'));
+    } on DioException catch (e) {
+      return Left(ServerFailure(
+        e.response?.data is Map 
+            ? (e.response?.data['message'] ?? 'Error al actualizar el pago.')
+            : 'Error al actualizar el pago.',
+      ));
+    } catch (e) {
+      return const Left(ServerFailure('Error inesperado al actualizar el pago.'));
     }
   }
 
