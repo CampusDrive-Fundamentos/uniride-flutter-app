@@ -8,12 +8,16 @@ class CreateRouteAndBookingParams {
   final String destinationAddress;
   final double destinationLat;
   final double destinationLng;
+  final double startLat;
+  final double startLng;
 
   CreateRouteAndBookingParams({
     required this.campus,
     required this.destinationAddress,
     required this.destinationLat,
     required this.destinationLng,
+    required this.startLat,
+    required this.startLng,
   });
 }
 
@@ -29,6 +33,8 @@ class CreateRouteAndBookingUseCase {
       destinationAddress: params.destinationAddress,
       destinationLat: params.destinationLat,
       destinationLng: params.destinationLng,
+      startLat: params.startLat,
+      startLng: params.startLng,
     );
 
     return await routeResult.fold(

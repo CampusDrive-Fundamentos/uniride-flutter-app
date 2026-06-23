@@ -42,6 +42,8 @@ class RoutesBloc extends Bloc<RoutesEvent, RoutesState> {
           destinationAddress: event.destinationAddress,
           destinationLat: event.destinationLat,
           destinationLng: event.destinationLng,
+          startLat: event.startLat,
+          startLng: event.startLng,
         ),
       );
       result.fold(

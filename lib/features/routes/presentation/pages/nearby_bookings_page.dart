@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import '../../../../core/constants/app_colors.dart';
+import '../../../../core/utils/polyline_decoder.dart';
 import '../blocs/routes_bloc.dart';
 import '../blocs/routes_event.dart';
 import '../blocs/routes_state.dart';
@@ -310,13 +312,23 @@ class _NearbyBookingsPageState extends State<NearbyBookingsPage> with SingleTick
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
+    return PopScope(
+      canPop: true,
+      onPopInvokedWithResult: (didPop, result) {
+        // Asegurar que el estado del dashboard se refresque al salir
+        if (didPop) {
+          context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+        }
+      },
+      child: Scaffold(
+        backgroundColor: AppColors.background,
       appBar: AppBar(
         title: const Text('Rutas Cercanas (500m)', style: TextStyle(color: Colors.white)),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: AppColors.primary),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () {
+            Navigator.of(context).maybePop();
+          },
         ),
       ),
       body: BlocConsumer<RoutesBloc, RoutesState>(
@@ -444,9 +456,14 @@ class _NearbyBookingsPageState extends State<NearbyBookingsPage> with SingleTick
                       // Simular una distancia mock basada en el index para presentación
                       final distance = (index + 1) * 120 + 35; 
                       
+                      List<LatLng> routePoints = [];
+                      if (booking.encodedPolyline != null) {
+                        routePoints = PolylineDecoder.decode(booking.encodedPolyline!);
+                      }
+
                       return Container(
                         margin: const EdgeInsets.only(bottom: 16),
-                        padding: const EdgeInsets.all(16),
+                        clipBehavior: Clip.antiAlias,
                         decoration: BoxDecoration(
                           color: AppColors.surface,
                           borderRadius: BorderRadius.circular(16),
@@ -462,140 +479,238 @@ class _NearbyBookingsPageState extends State<NearbyBookingsPage> with SingleTick
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Row(
-                                  children: [
-                                    const CircleAvatar(
-                                      radius: 18,
-                                      backgroundColor: AppColors.primary,
-                                      child: Icon(Icons.person, color: Colors.black, size: 18),
+                            // Mini Mapa de Previa
+                            if (routePoints.isNotEmpty)
+                              SizedBox(
+                                height: 140,
+                                child: IgnorePointer(
+                                  child: FlutterMap(
+                                    options: MapOptions(
+                                      initialCenter: routePoints[routePoints.length ~/ 2],
+                                      initialZoom: 12.0,
                                     ),
-                                    const SizedBox(width: 8),
-                                    Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'Conductor #${booking.leaderId}',
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 14,
-                                          ),
-                                        ),
-                                        Text(
-                                          'Ruta #${booking.routeId}',
-                                          style: const TextStyle(
-                                            color: AppColors.textSecondary,
-                                            fontSize: 11,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    color: Colors.blueAccent.withOpacity(0.15),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Row(
                                     children: [
-                                      const Icon(Icons.navigation, color: Colors.blueAccent, size: 12),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        'A ${distance}m de ti',
-                                        style: const TextStyle(
-                                          color: Colors.blueAccent,
-                                          fontSize: 11,
+                                      TileLayer(
+                                        urlTemplate: 'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+                                      ),
+                                      PolylineLayer(
+                                        polylines: [
+                                          Polyline(
+                                            points: routePoints,
+                                            color: AppColors.primary,
+                                            strokeWidth: 3.0,
+                                          ),
+                                        ],
+                                      ),
+                                      MarkerLayer(
+                                        markers: [
+                                          if (booking.startLat != null && booking.startLng != null)
+                                            Marker(
+                                              point: LatLng(booking.startLat!, booking.startLng!),
+                                              width: 30,
+                                              height: 30,
+                                              child: const Icon(Icons.school, color: AppColors.primary, size: 20),
+                                            ),
+                                          if (booking.destinationLat != null && booking.destinationLng != null)
+                                            Marker(
+                                              point: LatLng(booking.destinationLat!, booking.destinationLng!),
+                                              width: 30,
+                                              height: 30,
+                                              child: const Icon(Icons.flag, color: Colors.redAccent, size: 20),
+                                            ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            
+                            Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          const CircleAvatar(
+                                            radius: 18,
+                                            backgroundColor: AppColors.primary,
+                                            child: Icon(Icons.person, color: Colors.black, size: 18),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                'Estudiante #${booking.leaderId}',
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 14,
+                                                ),
+                                              ),
+                                              Text(
+                                                'Ruta #${booking.routeId}',
+                                                style: const TextStyle(
+                                                  color: AppColors.textSecondary,
+                                                  fontSize: 11,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ],
+                                      ),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: Colors.blueAccent.withOpacity(0.15),
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            const Icon(Icons.navigation, color: Colors.blueAccent, size: 12),
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              'A ${distance}m de ti',
+                                              style: const TextStyle(
+                                                color: Colors.blueAccent,
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const Divider(color: Colors.grey, height: 24),
+                                  
+                                  // Info de Ruta: Destino y Hora
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.location_on, color: AppColors.primary, size: 18),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            const Text(
+                                              'Salida:',
+                                              style: TextStyle(color: AppColors.textSecondary, fontSize: 11),
+                                            ),
+                                            Text(
+                                              widget.campus,
+                                              style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.access_time, color: AppColors.primary, size: 18),
+                                      const SizedBox(width: 8),
+                                      Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          const Text(
+                                            'Hora Salida:',
+                                            style: TextStyle(color: AppColors.textSecondary, fontSize: 11),
+                                          ),
+                                          Text(
+                                            booking.departureTime ?? 'Por definir',
+                                            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 16),
+
+                                  // Precio y Pasajeros
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          const Icon(Icons.payments_outlined, color: AppColors.primary, size: 18),
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            'S/ ${(booking.price ?? 5.0).toStringAsFixed(2)}',
+                                            style: const TextStyle(
+                                              color: AppColors.primary,
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      Row(
+                                        children: [
+                                          const Icon(Icons.people_outline, color: AppColors.textSecondary, size: 18),
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            '${booking.passengers.length}/4 Pasajeros',
+                                            style: const TextStyle(color: Colors.white, fontSize: 13),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 16),
+
+                                  // Estado del viaje
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.end,
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: Colors.greenAccent.withOpacity(0.12),
+                                          borderRadius: BorderRadius.circular(20),
+                                        ),
+                                        child: Text(
+                                          booking.status,
+                                          style: const TextStyle(
+                                            color: Colors.greenAccent,
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 16),
+
+                                  // Botón para unirse
+                                  SizedBox(
+                                    width: double.infinity,
+                                    child: ElevatedButton(
+                                      onPressed: () => _startJoinFlow(context, booking),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: AppColors.primary,
+                                        padding: const EdgeInsets.symmetric(vertical: 12),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                      ),
+                                      child: const Text(
+                                        'Unirse al Viaje',
+                                        style: TextStyle(
+                                          color: Colors.black,
                                           fontWeight: FontWeight.bold,
                                         ),
                                       ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const Divider(color: Colors.grey, height: 24),
-                            
-                            // Destino
-                            Row(
-                              children: [
-                                const Icon(Icons.location_on, color: AppColors.primary, size: 18),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      const Text(
-                                        'Destino Final:',
-                                        style: TextStyle(color: AppColors.textSecondary, fontSize: 11),
-                                      ),
-                                      Text(
-                                        'Ruta hacia Campus ${widget.campus}',
-                                        style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 16),
-
-                            // Pasajeros y estado
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Row(
-                                  children: [
-                                    const Icon(Icons.people_outline, color: AppColors.textSecondary, size: 18),
-                                    const SizedBox(width: 6),
-                                    Text(
-                                      '${booking.passengers.length}/4 Pasajeros',
-                                      style: const TextStyle(color: Colors.white, fontSize: 13),
-                                    ),
-                                  ],
-                                ),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    color: Colors.greenAccent.withOpacity(0.12),
-                                    borderRadius: BorderRadius.circular(20),
-                                  ),
-                                  child: Text(
-                                    booking.status,
-                                    style: const TextStyle(
-                                      color: Colors.greenAccent,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.bold,
                                     ),
                                   ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 16),
-
-                            // Botón para unirse
-                            SizedBox(
-                              width: double.infinity,
-                              child: ElevatedButton(
-                                onPressed: () => _startJoinFlow(context, booking),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: AppColors.primary,
-                                  padding: const EdgeInsets.symmetric(vertical: 12),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                ),
-                                child: const Text(
-                                  'Unirse al Viaje',
-                                  style: TextStyle(
-                                    color: Colors.black,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
+                                ],
                               ),
                             ),
                           ],
@@ -610,8 +725,9 @@ class _NearbyBookingsPageState extends State<NearbyBookingsPage> with SingleTick
           return const SizedBox.shrink();
         },
       ),
-    );
-  }
+    ),
+  );
+}
 }
 
 // Pintor de radar animado futurista

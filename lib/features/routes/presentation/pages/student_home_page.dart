@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -140,23 +139,6 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
     }
   }
 
-  // Genera coordenadas mock aleatorias dentro de un radio de la UPC para simulación
-  void _randomizeStudentLocation() {
-    final campus = _campusData[_selectedCampus]!;
-    final double baseLat = campus['lat'];
-    final double baseLng = campus['lng'];
-    
-    final random = Random();
-    final double offsetLat = (random.nextDouble() - 0.5) * 0.012;
-    final double offsetLng = (random.nextDouble() - 0.5) * 0.012;
-
-    setState(() {
-      _mockLat = baseLat + offsetLat;
-      _mockLng = baseLng + offsetLng;
-      _mockAddress = 'Simulado: Paradero a ${(offsetLat * 111000).abs().round()}m de la UPC';
-    });
-  }
-
   void _showSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message), backgroundColor: AppColors.primary),
@@ -295,6 +277,10 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
             _isActionLoading = false;
           });
           _showSnackBar(state.message);
+        } else if (state is NearbyBookingsLoaded || state is RoutesInitial) {
+          setState(() {
+            _isActionLoading = false;
+          });
         } else if (state is CurrentBookingLoaded) {
           setState(() {
             _isActionLoading = false;
@@ -447,7 +433,7 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                                 ),
                                 const SizedBox(width: 8),
                                 const Text(
-                                  'UPC Destino',
+                                  'Punto de Salida',
                                   style: TextStyle(
                                     color: AppColors.textSecondary,
                                     fontWeight: FontWeight.bold,
@@ -475,7 +461,10 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                                 if (newValue != null) {
                                   setState(() {
                                     _selectedCampus = newValue;
-                                    _randomizeStudentLocation();
+                                    final data = _campusData[newValue]!;
+                                    _mockLat = data['lat'];
+                                    _mockLng = data['lng'];
+                                    _mockAddress = data['address'];
                                   });
                                 }
                               },
@@ -497,11 +486,6 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                                 ),
                               ),
                             ),
-                            IconButton(
-                              icon: const Icon(Icons.shuffle, color: AppColors.primary, size: 18),
-                              onPressed: _randomizeStudentLocation,
-                              tooltip: 'Cambiar ubicación',
-                            )
                           ],
                         )
                       ],
@@ -655,8 +639,8 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                 children: [
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: () {
-                        Navigator.pushNamed(
+                      onPressed: () async {
+                        await Navigator.pushNamed(
                           context,
                           '/nearby-bookings',
                           arguments: {
@@ -665,6 +649,10 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                             'lng': _mockLng,
                           },
                         );
+                        // Al volver, refrescar el estado del dashboard
+                        if (mounted) {
+                          context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+                        }
                       },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppColors.primary,
@@ -684,7 +672,15 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                   Expanded(
                     child: OutlinedButton.icon(
                       onPressed: () {
-                        Navigator.pushNamed(context, '/create-announcement');
+                        Navigator.pushNamed(
+                          context,
+                          '/create-announcement',
+                          arguments: {
+                            'campus': _selectedCampus,
+                            'lat': _mockLat,
+                            'lng': _mockLng,
+                          },
+                        );
                       },
                       style: OutlinedButton.styleFrom(
                         foregroundColor: AppColors.primary,

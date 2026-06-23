@@ -35,6 +35,25 @@ class _CreateAnnouncementPageState extends State<CreateAnnouncementPage> {
   double? _destinationLat;
   double? _destinationLng;
 
+  // Coordenadas de origen pasadas desde el dashboard
+  double? _startLat;
+  double? _startLng;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+    if (args != null) {
+      setState(() {
+        _selectedCampus = args['campus'] ?? 'MONTERRICO';
+        _startLat = args['lat'];
+        _startLng = args['lng'];
+        // Reiniciar la puerta de salida para el campus recibido
+        _selectedExitGate = _gatesByCampus[_selectedCampus]!.first;
+      });
+    }
+  }
+
   // Coordenadas de campus para inicializar el mapa selector
   final Map<String, LatLng> _campusCoordinates = {
     'MONTERRICO': const LatLng(-12.1042, -76.9629),
@@ -74,7 +93,10 @@ class _CreateAnnouncementPageState extends State<CreateAnnouncementPage> {
   }
 
   Future<void> _openMapPicker() async {
-    final initialCenter = _campusCoordinates[_selectedCampus] ?? const LatLng(-12.1042, -76.9629);
+    final initialCenter = _startLat != null && _startLng != null
+        ? LatLng(_startLat!, _startLng!)
+        : (_campusCoordinates[_selectedCampus] ?? const LatLng(-12.1042, -76.9629));
+
     final LatLng? result = await Navigator.push<LatLng>(
       context,
       MaterialPageRoute(
@@ -121,6 +143,8 @@ class _CreateAnnouncementPageState extends State<CreateAnnouncementPage> {
               destinationAddress: _destinationController.text,
               destinationLat: _destinationLat!,
               destinationLng: _destinationLng!,
+              startLat: _startLat ?? _campusCoordinates[_selectedCampus]!.latitude,
+              startLng: _startLng ?? _campusCoordinates[_selectedCampus]!.longitude,
               exitGate: _selectedExitGate,
               departureTime: timeFormatted,
             ),

@@ -41,6 +41,8 @@ class RoutesRepositoryImpl implements RoutesRepository {
     required String destinationAddress,
     required double destinationLat,
     required double destinationLng,
+    required double startLat,
+    required double startLng,
   }) async {
     try {
       final response = await apiService.createRoute(
@@ -48,6 +50,8 @@ class RoutesRepositoryImpl implements RoutesRepository {
         destinationAddress: destinationAddress,
         destinationLat: destinationLat,
         destinationLng: destinationLng,
+        startLat: startLat,
+        startLng: startLng,
       );
       if (response.statusCode == 201 || response.statusCode == 200) {
         try {
@@ -93,6 +97,27 @@ class RoutesRepositoryImpl implements RoutesRepository {
       ));
     } catch (e) {
       return const Left(ServerFailure('Ocurrió un error inesperado al crear el grupo.'));
+    }
+  }
+
+  @override
+  Future<Either<Failure, RouteEntity>> getRouteById(int routeId) async {
+    try {
+      final response = await apiService.getRouteById(routeId);
+      if (response.statusCode == 200) {
+        final parsedMap = _parseMap(response.data);
+        final routeModel = RouteModel.fromJson(parsedMap);
+        return Right(routeModel);
+      }
+      return const Left(ServerFailure('No se pudo obtener los detalles de la ruta.'));
+    } on DioException catch (e) {
+      return Left(ServerFailure(
+        e.response?.data is Map 
+            ? (e.response?.data['message'] ?? 'Error al obtener detalles de la ruta.')
+            : 'Error al obtener detalles de la ruta.',
+      ));
+    } catch (e) {
+      return const Left(ServerFailure('Error inesperado al obtener detalles de la ruta.'));
     }
   }
 

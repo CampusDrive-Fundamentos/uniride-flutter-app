@@ -9,6 +9,9 @@ class BookingModel extends BookingEntity {
     required super.status,
     super.securityPin,
     required List<PassengerModel> super.passengers,
+    super.destinationAddress,
+    super.price,
+    super.departureTime,
   });
 
   factory BookingModel.fromJson(Map<String, dynamic> json) {
@@ -23,6 +26,9 @@ class BookingModel extends BookingEntity {
               .map((p) => PassengerModel.fromJson(Map<String, dynamic>.from(p as Map)))
               .toList()
           : [],
+      destinationAddress: json['destinationAddress'] as String?,
+      price: json['price'] != null ? (json['price'] as num).toDouble() : null,
+      departureTime: json['departureTime'] as String?,
     );
   }
 
@@ -34,6 +40,9 @@ class BookingModel extends BookingEntity {
       'status': status,
       'securityPin': securityPin,
       'passengers': passengers.map((p) => (p as PassengerModel).toJson()).toList(),
+      'destinationAddress': destinationAddress,
+      'price': price,
+      'departureTime': departureTime,
     };
   }
 }

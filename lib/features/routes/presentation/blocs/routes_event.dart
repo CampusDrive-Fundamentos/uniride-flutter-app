@@ -27,6 +27,8 @@ class CreateRouteAndBookingEvent extends RoutesEvent {
   final String destinationAddress;
   final double destinationLat;
   final double destinationLng;
+  final double startLat;
+  final double startLng;
   final String exitGate; // Adicional según US07 (Puerta de salida)
   final String departureTime; // Adicional según US07 (Hora de salida)
 
@@ -35,6 +37,8 @@ class CreateRouteAndBookingEvent extends RoutesEvent {
     required this.destinationAddress,
     required this.destinationLat,
     required this.destinationLng,
+    required this.startLat,
+    required this.startLng,
     required this.exitGate,
     required this.departureTime,
   });
@@ -45,6 +49,8 @@ class CreateRouteAndBookingEvent extends RoutesEvent {
         destinationAddress,
         destinationLat,
         destinationLng,
+        startLat,
+        startLng,
         exitGate,
         departureTime,
       ];

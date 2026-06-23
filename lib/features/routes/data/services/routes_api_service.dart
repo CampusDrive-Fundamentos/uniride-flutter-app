@@ -25,6 +25,8 @@ class RoutesApiService {
     required String destinationAddress,
     required double destinationLat,
     required double destinationLng,
+    required double startLat,
+    required double startLng,
   }) async {
     return await _dio.post(
       '/api/v1/routes',
@@ -33,6 +35,8 @@ class RoutesApiService {
         'destinationAddress': destinationAddress,
         'destinationLat': destinationLat,
         'destinationLng': destinationLng,
+        'startLat': startLat,
+        'startLng': startLng,
       },
     );
   }
@@ -42,6 +46,10 @@ class RoutesApiService {
       '/api/v1/bookings',
       queryParameters: {'routeId': routeId},
     );
+  }
+
+  Future<Response> getRouteById(int routeId) async {
+    return await _dio.get('/api/v1/routes/$routeId');
   }
 
   Future<Response> searchNearbyBookings({

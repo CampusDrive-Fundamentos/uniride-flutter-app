@@ -9,11 +9,15 @@ abstract class RoutesRepository {
     required String destinationAddress,
     required double destinationLat,
     required double destinationLng,
+    required double startLat,
+    required double startLng,
   });
 
   Future<Either<Failure, BookingEntity>> createBooking({
     required int routeId,
   });
+
+  Future<Either<Failure, RouteEntity>> getRouteById(int routeId);
 
   Future<Either<Failure, List<BookingEntity>>> searchNearbyBookings({
     required String campus,
