@@ -115,6 +115,16 @@ class RoutesBloc extends Bloc<RoutesEvent, RoutesState> {
 
     on<CancelBookingEvent>((event, emit) async {
       emit(RoutesLoading());
+
+      // NUEVO: Si hay un viaje asociado (anuncio ya publicado a taxistas), lo cancelamos primero
+      if (event.tripId != null) {
+        await repository.cancelTrip(
+          tripId: event.tripId!,
+          reason: 'Líder canceló el grupo desde la app',
+        );
+      }
+
+      // Luego borramos el Booking (lo cual borra también la Ruta en el backend)
       final result = await repository.cancelBooking(bookingId: event.bookingId);
       result.fold(
         (failure) => emit(RoutesError(failure.message)),

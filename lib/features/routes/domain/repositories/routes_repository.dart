@@ -63,4 +63,10 @@ abstract class RoutesRepository {
     required double totalAmount,
     required List<int> passengerIds,
   });
+
+  // NUEVO: Permite cancelar el viaje
+  Future<Either<Failure, void>> cancelTrip({
+    required int tripId,
+    required String reason,
+  });
 }

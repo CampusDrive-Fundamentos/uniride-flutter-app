@@ -320,7 +320,7 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
           setState(() {
             _isActionLoading = false;
           });
-          _showSnackBar('Grupo de viaje cancelado.');
+          _showSnackBar('Grupo de viaje cancelado exitosamente.');
           context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
         } else if (state is ConfirmArrivalSuccess) {
           setState(() {
@@ -708,7 +708,20 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
 
   Widget _buildActiveBookingDashboard(int currentUserId) {
     final booking = _currentBooking!;
-    final isLeader = booking.leaderId == currentUserId;
+    
+    // LÓGICA REFORZADA PARA DETERMINAR SI ERES EL LÍDER
+    bool isLeader = booking.leaderId == currentUserId;
+    if (!isLeader && booking.passengers.isNotEmpty) {
+      try {
+        final me = booking.passengers.firstWhere((p) => p.studentId == currentUserId);
+        isLeader = (me.role.toUpperCase() == 'LEADER');
+      } catch (e) {
+        // Fallback: Si acabas de crear el viaje, eres el único pasajero, asume que eres el líder
+        if (booking.passengers.length == 1 && booking.passengers.first.role.toUpperCase() == 'LEADER') {
+          isLeader = true;
+        }
+      }
+    }
     
     String statusText = 'Grupo Abierto';
     Color statusColor = Colors.greenAccent;
@@ -854,7 +867,7 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
           const Text('Pasajeros en el Grupo:', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
           const SizedBox(height: 6),
           ...booking.passengers.map((p) {
-            final isSelf = p.studentId == currentUserId;
+            final isSelf = p.studentId == currentUserId || (isLeader && p.role.toUpperCase() == 'LEADER');
             final isL = p.role.toUpperCase() == 'LEADER';
             return Container(
               margin: const EdgeInsets.only(bottom: 6),
@@ -923,9 +936,13 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
               const SizedBox(height: 8),
             ],
             if (isLeader)
+              // BOTÓN CORRECTO PARA EL LÍDER: LLama al Endpoint de Cancelar (/api/v1/bookings/{id})
               OutlinedButton.icon(
                 onPressed: _isActionLoading ? null : () {
-                  context.read<RoutesBloc>().add(CancelBookingEvent(booking.id));
+                  context.read<RoutesBloc>().add(CancelBookingEvent(
+                    bookingId: booking.id,
+                    tripId: _currentTrip != null ? _currentTrip!['id'] : null,
+                  ));
                 },
                 style: OutlinedButton.styleFrom(
                   foregroundColor: Colors.redAccent,
@@ -936,6 +953,7 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                 label: const Text('Cancelar Grupo', style: TextStyle(fontWeight: FontWeight.bold)),
               )
             else
+              // BOTÓN PARA SEGUIDORES: Llama al Endpoint de Salir (/leave)
               OutlinedButton.icon(
                 onPressed: _isActionLoading ? null : () {
                   context.read<RoutesBloc>().add(LeaveBookingEvent(

@@ -351,4 +351,27 @@ class RoutesRepositoryImpl implements RoutesRepository {
       return const Left(ServerFailure('Error inesperado al registrar el viaje.'));
     }
   }
+
+  // NUEVO: Implementación de cancelTrip
+  @override
+  Future<Either<Failure, void>> cancelTrip({
+    required int tripId,
+    required String reason,
+  }) async {
+    try {
+      final response = await apiService.cancelTrip(tripId: tripId, reason: reason);
+      if (response.statusCode == 200 || response.statusCode == 204) {
+        return const Right(null);
+      }
+      return const Left(ServerFailure('No se pudo cancelar el viaje.'));
+    } on DioException catch (e) {
+      return Left(ServerFailure(
+        e.response?.data is Map 
+            ? (e.response?.data['message'] ?? 'Error al cancelar el viaje.')
+            : 'Error al cancelar el viaje.',
+      ));
+    } catch (e) {
+      return const Left(ServerFailure('Error inesperado al cancelar el viaje.'));
+    }
+  }
 }
