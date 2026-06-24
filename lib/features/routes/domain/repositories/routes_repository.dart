@@ -9,11 +9,15 @@ abstract class RoutesRepository {
     required String destinationAddress,
     required double destinationLat,
     required double destinationLng,
+    required double startLat,
+    required double startLng,
   });
 
   Future<Either<Failure, BookingEntity>> createBooking({
     required int routeId,
   });
+
+  Future<Either<Failure, RouteEntity>> getRouteById(int routeId);
 
   Future<Either<Failure, List<BookingEntity>>> searchNearbyBookings({
     required String campus,
@@ -28,8 +32,27 @@ abstract class RoutesRepository {
     required String address,
   });
 
-  Future<Either<Failure, List<RouteEntity>>> getRoutesByCampus({
-    required String campus,
+  Future<Either<Failure, BookingEntity>> getCurrentBooking();
+
+  Future<Either<Failure, BookingEntity>> lockBooking({required int bookingId});
+
+  Future<Either<Failure, BookingEntity>> leaveBooking({
+    required int bookingId,
+    required double lat,
+    required double lng,
+  });
+
+  Future<Either<Failure, void>> cancelBooking({required int bookingId});
+
+  Future<Either<Failure, void>> confirmArrival({
+    required int tripId,
+    required int passengerId,
+  });
+
+  Future<Either<Failure, BookingEntity>> updatePayment({
+    required int bookingId,
+    required int passengerId,
+    required String method,
   });
 
   Future<Either<Failure, void>> createTrip({

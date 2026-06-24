@@ -1,9 +1,12 @@
 import 'dart:math';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/di/service_locator.dart' as di;
 import '../../../../core/widgets/custom_drawer.dart';
+import '../../../../core/utils/polyline_decoder.dart';
 
 class DriverHomePage extends StatefulWidget {
   const DriverHomePage({super.key});
@@ -25,6 +28,7 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
   Map<String, dynamic>? _activeBooking;
   final TextEditingController _pinController = TextEditingController();
   bool _isActionLoading = false;
+  List<LatLng> _routePoints = [];
 
   final Map<String, Map<String, dynamic>> _campusData = {
     'MONTERRICO': {
@@ -153,6 +157,11 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
       final routeResp = await dio.get('/api/v1/routes/$routeId');
       if (routeResp.statusCode == 200) {
         _activeRoute = Map<String, dynamic>.from(routeResp.data);
+        if (_activeRoute != null && _activeRoute!['encodedPolyline'] != null) {
+          _routePoints = PolylineDecoder.decode(_activeRoute!['encodedPolyline']);
+        } else {
+          _routePoints = [];
+        }
       }
 
       // Cargar Reserva (Booking)
@@ -248,11 +257,15 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
           _activeTrip = null;
           _activeRoute = null;
           _activeBooking = null;
+          _routePoints.clear();
         });
         _loadAvailableTrips();
       }
-    } catch (_) {
-      _showSnackBar('Error al finalizar el viaje.');
+    } catch (e) {
+      final msg = e is DioException && e.response?.data is Map
+          ? (e.response?.data['message'] ?? 'Error al finalizar el viaje.')
+          : 'Error al finalizar el viaje.';
+      _showSnackBar(msg);
     } finally {
       setState(() {
         _isActionLoading = false;
@@ -278,6 +291,7 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
           _activeTrip = null;
           _activeRoute = null;
           _activeBooking = null;
+          _routePoints.clear();
         });
         _loadAvailableTrips();
       }
@@ -299,39 +313,80 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
   @override
   Widget build(BuildContext context) {
     final hasActiveTrip = _activeTrip != null;
+    final campus = _campusData[_selectedCampus]!;
 
     return Scaffold(
       drawer: const CustomDrawer(),
       body: Stack(
         children: [
-          // 1. MAPA DE SIMULACIÓN HIGH-FIDELITY
+          // 1. MAPA DE INTERACCIÓN REAL (FLUTTER MAP)
           Positioned.fill(
-            child: AnimatedBuilder(
-              animation: _pulseController,
-              builder: (context, child) {
-                double tripLat = _campusData[_selectedCampus]!['lat'];
-                double tripLng = _campusData[_selectedCampus]!['lng'];
-                
-                if (hasActiveTrip && _activeRoute != null) {
-                  final dest = _activeRoute!['destination'];
-                  if (dest != null) {
-                    tripLat = dest['latitude'];
-                    tripLng = dest['longitude'];
-                  }
-                }
-
-                return CustomPaint(
-                  painter: _DriverMapPainter(
-                    pulseValue: _pulseController.value,
-                    driverLat: _campusData[_selectedCampus]!['lat'],
-                    driverLng: _campusData[_selectedCampus]!['lng'],
-                    destLat: tripLat,
-                    destLng: tripLng,
-                    campusName: _selectedCampus,
-                    drawRoute: hasActiveTrip,
+            child: FlutterMap(
+              options: MapOptions(
+                initialCenter: _routePoints.isNotEmpty
+                    ? _routePoints.first
+                    : LatLng(campus['lat'], campus['lng']),
+                initialZoom: 14.0,
+              ),
+              children: [
+                TileLayer(
+                  urlTemplate: 'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+                  userAgentPackageName: 'com.uniride.app',
+                ),
+                if (_routePoints.isNotEmpty)
+                  PolylineLayer(
+                    polylines: [
+                      Polyline(
+                        points: _routePoints,
+                        color: AppColors.primary,
+                        strokeWidth: 4.0,
+                      ),
+                    ],
                   ),
-                );
-              },
+                MarkerLayer(
+                  markers: [
+                    // Campus UPC (Origen)
+                    Marker(
+                      point: LatLng(campus['lat'], campus['lng']),
+                      width: 80.0,
+                      height: 80.0,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.school, color: AppColors.primary, size: 30),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.7),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              _selectedCampus,
+                              style: const TextStyle(color: AppColors.primary, fontSize: 9, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // Destino y Paradas del viaje activo
+                    if (hasActiveTrip && _activeRoute != null) ...[
+                      Marker(
+                        point: LatLng(_activeRoute!['destination']['latitude'], _activeRoute!['destination']['longitude']),
+                        width: 40.0,
+                        height: 40.0,
+                        child: const Icon(Icons.flag, color: Colors.redAccent, size: 32),
+                      ),
+                      if (_activeRoute!['waypoints'] != null)
+                        ...((_activeRoute!['waypoints'] as List).map((wp) => Marker(
+                              point: LatLng(wp['latitude'], wp['longitude']),
+                              width: 40.0,
+                              height: 40.0,
+                              child: const Icon(Icons.pin_drop, color: Colors.blueAccent, size: 28),
+                            )))
+                    ]
+                  ],
+                ),
+              ],
             ),
           ),
 
@@ -576,7 +631,6 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
     final destAddress = route != null ? route['destination']['address'] : 'Cargando destino...';
     final amount = _activeTrip!['totalAmount'] ?? 15.0;
     
-    // Obtener cantidad de pasajeros
     final passengerCount = booking != null && booking['passengers'] != null 
         ? (booking['passengers'] as List).length 
         : 1;
@@ -635,7 +689,6 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
               child: Center(child: CircularProgressIndicator(color: AppColors.primary)),
             )
           else ...[
-            // Detalles de la ruta
             Row(
               children: [
                 const Icon(Icons.location_on, color: AppColors.primary, size: 20),
@@ -663,9 +716,7 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
             
             const SizedBox(height: 16),
 
-            // Acciones según el estado del viaje
             if (status == 'ACCEPTED') ...[
-              // Ingresar PIN para empezar
               const Text(
                 'Solicita el PIN de seguridad del estudiante líder para iniciar el viaje:',
                 style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
@@ -709,7 +760,6 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
                 child: const Text('Cancelar Viaje', style: TextStyle(fontWeight: FontWeight.bold)),
               ),
             ] else if (status == 'ACTIVE') ...[
-              // Finalizar viaje
               ElevatedButton(
                 onPressed: _isActionLoading ? null : _completeTrip,
                 style: ElevatedButton.styleFrom(
@@ -723,125 +773,5 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
         ],
       ),
     );
-  }
-}
-
-class _DriverMapPainter extends CustomPainter {
-  final double pulseValue;
-  final double driverLat;
-  final double driverLng;
-  final double destLat;
-  final double destLng;
-  final String campusName;
-  final bool drawRoute;
-
-  _DriverMapPainter({
-    required this.pulseValue,
-    required this.driverLat,
-    required this.driverLng,
-    required this.destLat,
-    required this.destLng,
-    required this.campusName,
-    required this.drawRoute,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final Paint gridPaint = Paint()
-      ..color = Colors.white.withOpacity(0.03)
-      ..strokeWidth = 1.0;
-
-    final Paint roadPaint = Paint()
-      ..color = Colors.white.withOpacity(0.07)
-      ..strokeWidth = 3.0
-      ..style = PaintingStyle.stroke;
-
-    final Paint mainHighwayPaint = Paint()
-      ..color = AppColors.primary.withOpacity(0.25)
-      ..strokeWidth = 5.0
-      ..style = PaintingStyle.stroke;
-
-    // 1. Fondo Oscuro
-    canvas.drawRect(
-      Rect.fromLTWH(0, 0, size.width, size.height),
-      Paint()..color = const Color(0xFF0F0F12),
-    );
-
-    // 2. Cuadrícula
-    const double gridSpace = 40.0;
-    for (double i = 0; i < size.width; i += gridSpace) {
-      canvas.drawLine(Offset(i, 0), Offset(i, size.height), gridPaint);
-    }
-    for (double i = 0; i < size.height; i += gridSpace) {
-      canvas.drawLine(Offset(0, i), Offset(size.width, i), gridPaint);
-    }
-
-    // 3. Caminos Mock
-    final Path roads = Path()
-      ..moveTo(0, size.height * 0.3)
-      ..lineTo(size.width, size.height * 0.45)
-      ..moveTo(size.width * 0.2, 0)
-      ..quadraticBezierTo(size.width * 0.5, size.height * 0.5, size.width * 0.8, size.height)
-      ..moveTo(0, size.height * 0.7)
-      ..lineTo(size.width, size.height * 0.65)
-      ..moveTo(size.width * 0.1, size.height * 0.2)
-      ..lineTo(size.width * 0.9, size.height * 0.8);
-    canvas.drawPath(roads, roadPaint);
-
-    final Offset driverOffset = Offset(size.width * 0.5, size.height * 0.45);
-
-    if (drawRoute) {
-      final double scale = 15000.0;
-      final double dLat = destLat - driverLat;
-      final double dLng = destLng - driverLng;
-      final Offset destOffset = Offset(
-        driverOffset.dx + (dLng * scale),
-        driverOffset.dy - (dLat * scale),
-      );
-
-      // Dibujar Ruta
-      final Path routePath = Path()
-        ..moveTo(driverOffset.dx, driverOffset.dy)
-        ..quadraticBezierTo(
-          (driverOffset.dx + destOffset.dx) / 2 + 40,
-          (driverOffset.dy + destOffset.dy) / 2 - 30,
-          destOffset.dx,
-          destOffset.dy,
-        );
-      canvas.drawPath(routePath, mainHighwayPaint);
-
-      // Pintar Destino
-      final Paint destPaint = Paint()
-        ..color = Colors.redAccent
-        ..style = PaintingStyle.fill;
-      canvas.drawCircle(destOffset, 8, destPaint);
-      canvas.drawCircle(destOffset, 15 * (0.3 + 0.7 * pulseValue), Paint()..color = Colors.redAccent.withOpacity(0.2 * (1.0 - pulseValue)));
-    }
-
-    // Pintar Conductor (Punto Principal)
-    final Paint driverPaint = Paint()
-      ..color = AppColors.primary
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(driverOffset, 10, driverPaint);
-    canvas.drawCircle(driverOffset, 20 * (0.3 + 0.7 * pulseValue), Paint()..color = AppColors.primary.withOpacity(0.25 * (1.0 - pulseValue)));
-
-    // Dibujar texto del Campus de Origen
-    final TextPainter textPainter = TextPainter(
-      text: TextSpan(
-        text: 'UPC $campusName',
-        style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    textPainter.paint(canvas, Offset(driverOffset.dx - textPainter.width / 2, driverOffset.dy - 25));
-  }
-
-  @override
-  bool shouldRepaint(covariant _DriverMapPainter oldDelegate) {
-    return oldDelegate.pulseValue != pulseValue || 
-           oldDelegate.campusName != campusName || 
-           oldDelegate.drawRoute != drawRoute ||
-           oldDelegate.destLat != destLat ||
-           oldDelegate.destLng != destLng;
   }
 }

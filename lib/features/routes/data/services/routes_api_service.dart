@@ -25,6 +25,8 @@ class RoutesApiService {
     required String destinationAddress,
     required double destinationLat,
     required double destinationLng,
+    required double startLat,
+    required double startLng,
   }) async {
     return await _dio.post(
       '/api/v1/routes',
@@ -33,6 +35,8 @@ class RoutesApiService {
         'destinationAddress': destinationAddress,
         'destinationLat': destinationLat,
         'destinationLng': destinationLng,
+        'startLat': startLat,
+        'startLng': startLng,
       },
     );
   }
@@ -42,6 +46,10 @@ class RoutesApiService {
       '/api/v1/bookings',
       queryParameters: {'routeId': routeId},
     );
+  }
+
+  Future<Response> getRouteById(int routeId) async {
+    return await _dio.get('/api/v1/routes/$routeId');
   }
 
   Future<Response> searchNearbyBookings({
@@ -75,8 +83,50 @@ class RoutesApiService {
     );
   }
 
-  Future<Response> getRoutesByCampus({required String campus}) async {
-    return await _dio.get('/api/v1/routes/campus/${_mapAppCampusToBackend(campus)}');
+  Future<Response> getCurrentBooking() async {
+    return await _dio.get('/api/v1/bookings/current');
+  }
+
+  Future<Response> lockBooking({required int bookingId}) async {
+    return await _dio.post('/api/v1/bookings/$bookingId/lock');
+  }
+
+  Future<Response> leaveBooking({
+    required int bookingId,
+    required double lat,
+    required double lng,
+  }) async {
+    return await _dio.delete(
+      '/api/v1/bookings/$bookingId/leave',
+      queryParameters: {
+        'lat': lat,
+        'lng': lng,
+      },
+    );
+  }
+
+  Future<Response> cancelBooking({required int bookingId}) async {
+    return await _dio.delete('/api/v1/bookings/$bookingId');
+  }
+
+  Future<Response> confirmArrival({
+    required int tripId,
+    required int passengerId,
+  }) async {
+    return await _dio.patch('/api/v1/trips/$tripId/arrivals/$passengerId');
+  }
+
+  Future<Response> updatePayment({
+    required int bookingId,
+    required int passengerId,
+    required String method,
+  }) async {
+    return await _dio.patch(
+      '/api/v1/bookings/$bookingId/passengers/$passengerId/payment-status',
+      queryParameters: {
+        'method': method,
+      },
+    );
   }
 
   Future<Response> createTrip({

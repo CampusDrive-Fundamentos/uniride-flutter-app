@@ -1,7 +1,20 @@
-import 'dart:math';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:dio/dio.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/widgets/custom_drawer.dart';
+import '../../../../core/di/service_locator.dart' as di;
+import '../../../../core/utils/polyline_decoder.dart';
+import '../../../profile/presentation/blocs/profile_bloc.dart';
+import '../../data/models/route_model.dart';
+import '../blocs/routes_bloc.dart';
+import '../blocs/routes_event.dart';
+import '../blocs/routes_state.dart';
+import '../../domain/entities/booking_entity.dart';
+import '../../domain/entities/route_entity.dart';
 
 class StudentHomePage extends StatefulWidget {
   const StudentHomePage({super.key});
@@ -18,6 +31,14 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
   double _mockLat = -12.1042;
   double _mockLng = -76.9629;
   String _mockAddress = 'Av. Primavera 2390, Surco';
+
+  // Active booking variables
+  BookingEntity? _currentBooking;
+  RouteEntity? _currentRoute;
+  Map<String, dynamic>? _currentTrip;
+  List<LatLng> _routePoints = [];
+  bool _isActionLoading = false;
+  int? _cachedUserId;
 
   // Opciones de campus de la UPC con sus coordenadas reales aproximadas
   final Map<String, Map<String, dynamic>> _campusData = {
@@ -50,6 +71,10 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
       vsync: this,
       duration: const Duration(seconds: 2),
     )..repeat();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+    });
   }
 
   @override
@@ -58,468 +83,929 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
     super.dispose();
   }
 
-  // Genera coordenadas mock aleatorias dentro de un radio de la UPC para simulación
-  void _randomizeStudentLocation() {
-    final campus = _campusData[_selectedCampus]!;
-    final double baseLat = campus['lat'];
-    final double baseLng = campus['lng'];
-    
-    // Generamos una desviación de aproximadamente 300 a 800 metros (0.003 a 0.008 en lat/lng)
-    final random = Random();
-    final double offsetLat = (random.nextDouble() - 0.5) * 0.012;
-    final double offsetLng = (random.nextDouble() - 0.5) * 0.012;
-
-    setState(() {
-      _mockLat = baseLat + offsetLat;
-      _mockLng = baseLng + offsetLng;
-      _mockAddress = 'Simulado: Paradero a ${(offsetLat * 111000).abs().round()}m de la UPC';
-    });
+  Future<void> _loadRouteDetails(int routeId) async {
+    try {
+      final dio = di.sl<Dio>();
+      final response = await dio.get('/api/v1/routes/$routeId');
+      if (response.statusCode == 200) {
+        final data = response.data;
+        if (data != null) {
+          final parsedMap = data is Map ? Map<String, dynamic>.from(data) : jsonDecode(data) as Map<String, dynamic>;
+          final route = RouteModel.fromJson(parsedMap);
+          setState(() {
+            _currentRoute = route;
+            if (route.encodedPolyline != null) {
+              _routePoints = PolylineDecoder.decode(route.encodedPolyline!);
+            } else {
+              _routePoints = [];
+            }
+          });
+        }
+      }
+    } catch (_) {}
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      drawer: const CustomDrawer(),
-      body: Stack(
-        children: [
-          // 1. MAPA DE SIMULACIÓN HIGH-FIDELITY
-          Positioned.fill(
-            child: AnimatedBuilder(
-              animation: _pulseController,
-              builder: (context, child) {
-                return CustomPaint(
-                  painter: _VectorMapPainter(
-                    pulseValue: _pulseController.value,
-                    studentLat: _mockLat,
-                    studentLng: _mockLng,
-                    campusLat: _campusData[_selectedCampus]!['lat'],
-                    campusLng: _campusData[_selectedCampus]!['lng'],
-                    campusName: _selectedCampus,
-                  ),
-                );
-              },
-            ),
+  Future<void> _checkActiveTrip() async {
+    try {
+      final dio = di.sl<Dio>();
+      final response = await dio.get('/api/v1/trips/current');
+      if (response.statusCode == 200 && response.data != null) {
+        setState(() {
+          _currentTrip = Map<String, dynamic>.from(response.data);
+        });
+      } else {
+        setState(() {
+          _currentTrip = null;
+        });
+      }
+    } catch (_) {
+      setState(() {
+        _currentTrip = null;
+      });
+    }
+  }
+
+  Future<void> _loadActiveBookingDetails(BookingEntity booking) async {
+    setState(() {
+      _currentBooking = booking;
+    });
+    await _loadRouteDetails(booking.routeId);
+    if (booking.status != 'OPEN') {
+      await _checkActiveTrip();
+    } else {
+      setState(() {
+        _currentTrip = null;
+      });
+    }
+  }
+
+  void _showSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: AppColors.primary),
+    );
+  }
+
+  void _showPaymentMethodSelector(int bookingId, int passengerId) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: const Text('Método de Pago', style: TextStyle(color: Colors.white)),
+        content: const Text('Selecciona el método de pago usado por el estudiante:', style: TextStyle(color: AppColors.textSecondary)),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              context.read<RoutesBloc>().add(UpdatePassengerPaymentEvent(
+                bookingId: bookingId,
+                passengerId: passengerId,
+                method: 'YAPE',
+              ));
+            },
+            child: const Text('YAPE', style: TextStyle(color: AppColors.primary)),
           ),
-
-          // 2. GRADIENT OVERLAYS PARA MEJOR CONTRASTE Y ESTÉTICA PREMIUM
-          Positioned.fill(
-            child: IgnorePointer(
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      Colors.black.withOpacity(0.6),
-                      Colors.transparent,
-                      Colors.transparent,
-                      Colors.black.withOpacity(0.8),
-                    ],
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                  ),
-                ),
-              ),
-            ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              context.read<RoutesBloc>().add(UpdatePassengerPaymentEvent(
+                bookingId: bookingId,
+                passengerId: passengerId,
+                method: 'PLIN',
+              ));
+            },
+            child: const Text('PLIN', style: TextStyle(color: AppColors.primary)),
           ),
-
-          // 3. BARRA SUPERIOR: SELECTOR DE CAMPUS Y DIRECCIÓN
-          Positioned(
-            top: 50,
-            left: 20,
-            right: 20,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: AppColors.surface.withOpacity(0.9),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: AppColors.primary.withOpacity(0.2), width: 1),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.4),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(
-                        children: [
-                          Builder(
-                            builder: (context) => IconButton(
-                              icon: const Icon(Icons.menu, color: AppColors.primary),
-                              onPressed: () => Scaffold.of(context).openDrawer(),
-                              padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints(),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          const Text(
-                            'UPC Destino',
-                            style: TextStyle(
-                              color: AppColors.textSecondary,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
-                      ),
-                      // Dropdown de Campus
-                      DropdownButton<String>(
-                        value: _selectedCampus,
-                        dropdownColor: AppColors.surface,
-                        underline: const SizedBox(),
-                        icon: const Icon(Icons.arrow_drop_down, color: AppColors.primary),
-                        style: const TextStyle(
-                          color: AppColors.textPrimary,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        items: _campusData.keys.map((String value) {
-                          return DropdownMenuItem<String>(
-                            value: value,
-                            child: Text('Campus $value'),
-                          );
-                        }).toList(),
-                        onChanged: (newValue) {
-                          if (newValue != null) {
-                            setState(() {
-                              _selectedCampus = newValue;
-                              // Actualizar también ubicación del estudiante relativamente cerca
-                              _randomizeStudentLocation();
-                            });
-                          }
-                        },
-                      ),
-                    ],
-                  ),
-                  const Divider(color: Colors.grey, height: 16),
-                  Row(
-                    children: [
-                      const Icon(Icons.my_location, color: Colors.blueAccent, size: 18),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          _mockAddress,
-                          style: const TextStyle(
-                            color: AppColors.textPrimary,
-                            fontSize: 14,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.shuffle, color: AppColors.primary, size: 18),
-                        onPressed: _randomizeStudentLocation,
-                        tooltip: 'Cambiar ubicación',
-                      )
-                    ],
-                  )
-                ],
-              ),
-            ),
-          ),
-
-          // 4. PANEL DE CONTROL INFERIOR (CARD FLOTANTE)
-          Positioned(
-            bottom: 20,
-            left: 20,
-            right: 20,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Info rápida sobre el algoritmo de 500 metros
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  margin: const EdgeInsets.only(bottom: 12),
-                  decoration: BoxDecoration(
-                    color: Colors.blueAccent.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: Colors.blueAccent.withOpacity(0.3)),
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.radar, color: Colors.blueAccent, size: 16),
-                      SizedBox(width: 6),
-                      Text(
-                        'Escaneo de rutas dentro de 500 metros activado',
-                        style: TextStyle(
-                          color: Colors.blueAccent,
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                // Card principal
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: AppColors.surface.withOpacity(0.95),
-                    borderRadius: BorderRadius.circular(24),
-                    border: Border.all(color: Colors.white.withOpacity(0.08)),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.5),
-                        blurRadius: 15,
-                        offset: const Offset(0, -4),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      const Text(
-                        '¿Listo para tu viaje diario?',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: AppColors.textPrimary,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      const Text(
-                        'Viaja seguro, comparte gastos y reduce la huella de carbono.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: AppColors.textSecondary,
-                          fontSize: 12,
-                        ),
-                      ),
-                      const SizedBox(height: 18),
-                      
-                      Row(
-                        children: [
-                          // Botón para Seguidor (Buscar Viajes)
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed: () {
-                                Navigator.pushNamed(
-                                  context,
-                                  '/nearby-bookings',
-                                  arguments: {
-                                    'campus': _selectedCampus,
-                                    'lat': _mockLat,
-                                    'lng': _mockLng,
-                                  },
-                                );
-                              },
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: AppColors.primary,
-                                padding: const EdgeInsets.symmetric(vertical: 14),
-                              ),
-                              icon: const Icon(Icons.search, color: Colors.black),
-                              label: const Text(
-                                'Buscar Rutas',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.black,
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          // Botón para Líder (Crear Anuncio)
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: () {
-                                Navigator.pushNamed(context, '/create-announcement');
-                              },
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: AppColors.primary,
-                                side: const BorderSide(color: AppColors.primary),
-                                padding: const EdgeInsets.symmetric(vertical: 14),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                              ),
-                              icon: const Icon(Icons.add_road_rounded),
-                              label: const Text(
-                                'Crear Anuncio',
-                                style: TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              context.read<RoutesBloc>().add(UpdatePassengerPaymentEvent(
+                bookingId: bookingId,
+                passengerId: passengerId,
+                method: 'CASH',
+              ));
+            },
+            child: const Text('EFECTIVO', style: TextStyle(color: AppColors.primary)),
           ),
         ],
       ),
     );
   }
-}
 
-// Pintor de mapa premium personalizado que simula un mapa oscuro de alta tecnología
-class _VectorMapPainter extends CustomPainter {
-  final double pulseValue;
-  final double studentLat;
-  final double studentLng;
-  final double campusLat;
-  final double campusLng;
-  final String campusName;
+  List<Marker> _buildMapMarkers(Map<String, dynamic> campus) {
+    List<Marker> markers = [];
 
-  _VectorMapPainter({
-    required this.pulseValue,
-    required this.studentLat,
-    required this.studentLng,
-    required this.campusLat,
-    required this.campusLng,
-    required this.campusName,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final Paint gridPaint = Paint()
-      ..color = Colors.white.withOpacity(0.03)
-      ..strokeWidth = 1.0;
-
-    final Paint roadPaint = Paint()
-      ..color = Colors.white.withOpacity(0.07)
-      ..strokeWidth = 3.0
-      ..style = PaintingStyle.stroke;
-
-    final Paint mainHighwayPaint = Paint()
-      ..color = AppColors.primary.withOpacity(0.15)
-      ..strokeWidth = 5.0
-      ..style = PaintingStyle.stroke;
-
-    // 1. Pintar fondo de mapa oscuro
-    canvas.drawRect(
-      Rect.fromLTWH(0, 0, size.width, size.height),
-      Paint()..color = const Color(0xFF0F0F12),
-    );
-
-    // 2. Dibujar cuadrícula (Grid Lines)
-    const double gridSpace = 40.0;
-    for (double i = 0; i < size.width; i += gridSpace) {
-      canvas.drawLine(Offset(i, 0), Offset(i, size.height), gridPaint);
-    }
-    for (double i = 0; i < size.height; i += gridSpace) {
-      canvas.drawLine(Offset(0, i), Offset(size.width, i), gridPaint);
-    }
-
-    // 3. Dibujar Caminos Mock (Vías del mapa)
-    final Path roads = Path()
-      ..moveTo(0, size.height * 0.3)
-      ..lineTo(size.width, size.height * 0.45)
-      ..moveTo(size.width * 0.2, 0)
-      ..quadraticBezierTo(size.width * 0.5, size.height * 0.5, size.width * 0.8, size.height)
-      ..moveTo(0, size.height * 0.7)
-      ..lineTo(size.width, size.height * 0.65)
-      ..moveTo(size.width * 0.1, size.height * 0.2)
-      ..lineTo(size.width * 0.9, size.height * 0.8);
-    canvas.drawPath(roads, roadPaint);
-
-    // Calcular centros relativos en la pantalla para simulación
-    // Mapeamos el espacio de lat/lng al espacio en píxeles de la pantalla
-    // Centro de la pantalla será el punto medio entre estudiante y campus
-    final Offset campusOffset = Offset(size.width * 0.5, size.height * 0.4);
-    
-    // El estudiante estará desplazado según la diferencia de coordenadas
-    final double scale = 15000.0; // Factor de escala para que se vea el desplazamiento
-    final double dLat = studentLat - campusLat;
-    final double dLng = studentLng - campusLng;
-    
-    // En coordenadas de mapa, +lat es arriba (-y), +lng es derecha (+x)
-    final Offset studentOffset = Offset(
-      campusOffset.dx + (dLng * scale),
-      campusOffset.dy - (dLat * scale),
-    );
-
-    // 4. Dibujar ruta del estudiante al campus (línea dorada semi-transparente)
-    final Path routePath = Path()
-      ..moveTo(studentOffset.dx, studentOffset.dy)
-      ..quadraticBezierTo(
-        (studentOffset.dx + campusOffset.dx) / 2 + 30,
-        (studentOffset.dy + campusOffset.dy) / 2 - 40,
-        campusOffset.dx,
-        campusOffset.dy,
-      );
-    canvas.drawPath(routePath, mainHighwayPaint);
-
-    // Dibujar polyline animada de flujo
-    final Paint pulseLinePaint = Paint()
-      ..color = AppColors.primary
-      ..strokeWidth = 2.0
-      ..style = PaintingStyle.stroke;
-    canvas.drawPath(routePath, pulseLinePaint);
-
-    // 5. Dibujar área de escaneo de 500 metros del estudiante (Radar)
-    // 500 metros a la escala usada equivale a un radio de unos 80 píxeles
-    const double radius500m = 90.0;
-    
-    final Paint radarFillPaint = Paint()
-      ..color = Colors.blueAccent.withOpacity(0.08)
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(studentOffset, radius500m, radarFillPaint);
-
-    final Paint radarBorderPaint = Paint()
-      ..color = Colors.blueAccent.withOpacity(0.4 * (1 - pulseValue))
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5;
-    canvas.drawCircle(studentOffset, radius500m * pulseValue, radarBorderPaint);
-    canvas.drawCircle(studentOffset, radius500m, Paint()
-      ..color = Colors.blueAccent.withOpacity(0.3)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.0);
-
-    // 6. Dibujar pin de ubicación del estudiante (Azul)
-    final Paint studentPointPaint = Paint()
-      ..color = Colors.blueAccent
-      ..style = PaintingStyle.fill;
-    final Paint studentGlowPaint = Paint()
-      ..color = Colors.blueAccent.withOpacity(0.3)
-      ..style = PaintingStyle.fill;
-      
-    canvas.drawCircle(studentOffset, 14, studentGlowPaint);
-    canvas.drawCircle(studentOffset, 6, studentPointPaint);
-    canvas.drawCircle(studentOffset, 3, Paint()..color = Colors.white);
-
-    // 7. Dibujar pin de ubicación de la Universidad UPC (Amarillo)
-    final Paint campusPointPaint = Paint()
-      ..color = AppColors.primary
-      ..style = PaintingStyle.fill;
-    final Paint campusGlowPaint = Paint()
-      ..color = AppColors.primary.withOpacity(0.3)
-      ..style = PaintingStyle.fill;
-
-    canvas.drawCircle(campusOffset, 16, campusGlowPaint);
-    canvas.drawCircle(campusOffset, 8, campusPointPaint);
-    
-    // Dibujar la "U" o corona en el pin de la UPC
-    canvas.drawCircle(campusOffset, 4, Paint()..color = Colors.black);
-
-    // Texto del campus
-    final TextPainter textPainter = TextPainter(
-      text: TextSpan(
-        text: 'UPC $campusName',
-        style: TextStyle(
-          color: AppColors.primary,
-          fontSize: 10,
-          fontWeight: FontWeight.bold,
-          backgroundColor: Colors.black.withOpacity(0.7),
+    // 1. Origen (Campus)
+    markers.add(
+      Marker(
+        point: LatLng(campus['lat'], campus['lng']),
+        width: 80.0,
+        height: 80.0,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.school, color: AppColors.primary, size: 30),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.7),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                _selectedCampus,
+                style: const TextStyle(color: AppColors.primary, fontSize: 9, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
         ),
       ),
-      textDirection: TextDirection.ltr,
     );
-    textPainter.layout();
-    textPainter.paint(
-      canvas,
-      Offset(campusOffset.dx - textPainter.width / 2, campusOffset.dy - 30),
-    );
+
+    // 2. Destino Final
+    if (_currentRoute != null) {
+      markers.add(
+        Marker(
+          point: LatLng(_currentRoute!.destination.latitude, _currentRoute!.destination.longitude),
+          width: 40.0,
+          height: 40.0,
+          child: const Icon(Icons.flag, color: Colors.redAccent, size: 32),
+        ),
+      );
+
+      // 3. Waypoints (Paradas)
+      for (var wp in _currentRoute!.waypoints) {
+        markers.add(
+          Marker(
+            point: LatLng(wp.latitude, wp.longitude),
+            width: 40.0,
+            height: 40.0,
+            child: const Icon(Icons.pin_drop, color: Colors.blueAccent, size: 28),
+          ),
+        );
+      }
+    } else {
+      markers.add(
+        Marker(
+          point: LatLng(_mockLat, _mockLng),
+          width: 40.0,
+          height: 40.0,
+          child: const Icon(Icons.location_on, color: Colors.blueAccent, size: 30),
+        ),
+      );
+    }
+
+    return markers;
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+  Widget build(BuildContext context) {
+    final profileState = context.watch<ProfileBloc>().state;
+    if (profileState is ProfileLoaded) {
+      _cachedUserId = profileState.userData.id;
+    } else if (profileState is ProfileUpdateSuccess) {
+      _cachedUserId = profileState.userData.id;
+    }
+    final currentUserId = _cachedUserId ?? 1;
+
+    return BlocConsumer<RoutesBloc, RoutesState>(
+      listener: (context, state) {
+        if (state is RoutesLoading) {
+          setState(() {
+            _isActionLoading = true;
+          });
+        } else if (state is RoutesError) {
+          setState(() {
+            _isActionLoading = false;
+          });
+          _showSnackBar(state.message);
+        } else if (state is NearbyBookingsLoaded || state is RoutesInitial) {
+          setState(() {
+            _isActionLoading = false;
+          });
+        } else if (state is CurrentBookingLoaded) {
+          setState(() {
+            _isActionLoading = false;
+          });
+          _loadActiveBookingDetails(state.booking);
+        } else if (state is CurrentBookingEmpty) {
+          setState(() {
+            _isActionLoading = false;
+            _currentBooking = null;
+            _currentRoute = null;
+            _currentTrip = null;
+            _routePoints = [];
+          });
+        } else if (state is RouteAndBookingCreated) {
+          setState(() {
+            _isActionLoading = false;
+          });
+          context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+        } else if (state is JoinedBookingSuccess) {
+          setState(() {
+            _isActionLoading = false;
+          });
+          context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+        } else if (state is LockAndPublishSuccess) {
+          setState(() {
+            _isActionLoading = false;
+          });
+          _showSnackBar('¡Anuncio publicado! Buscando conductor...');
+          context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+        } else if (state is LeaveBookingSuccess) {
+          setState(() {
+            _isActionLoading = false;
+          });
+          _showSnackBar('Saliste del grupo de viaje.');
+          context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+        } else if (state is CancelBookingSuccess) {
+          setState(() {
+            _isActionLoading = false;
+          });
+          _showSnackBar('Grupo de viaje cancelado.');
+          context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+        } else if (state is ConfirmArrivalSuccess) {
+          setState(() {
+            _isActionLoading = false;
+          });
+          _showSnackBar('¡Llegada confirmada a salvo!');
+          context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+        } else if (state is UpdatePaymentSuccess) {
+          setState(() {
+            _isActionLoading = false;
+          });
+          _showSnackBar('Checklist de pago actualizado.');
+          _loadActiveBookingDetails(state.booking);
+        }
+      },
+      builder: (context, state) {
+        final campus = _campusData[_selectedCampus]!;
+        final hasActiveBooking = _currentBooking != null;
+
+        return Scaffold(
+          drawer: const CustomDrawer(),
+          body: Stack(
+            children: [
+              // 1. MAPA DE INTERACCIÓN REAL (FLUTTER MAP)
+              Positioned.fill(
+                child: FlutterMap(
+                  options: MapOptions(
+                    initialCenter: _routePoints.isNotEmpty
+                        ? _routePoints.first
+                        : LatLng(campus['lat'], campus['lng']),
+                    initialZoom: 14.0,
+                  ),
+                  children: [
+                    TileLayer(
+                      urlTemplate: 'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+                      userAgentPackageName: 'com.uniride.app',
+                    ),
+                    if (_routePoints.isNotEmpty)
+                      PolylineLayer(
+                        polylines: [
+                          Polyline(
+                            points: _routePoints,
+                            color: AppColors.primary,
+                            strokeWidth: 4.0,
+                          ),
+                        ],
+                      ),
+                    MarkerLayer(
+                      markers: _buildMapMarkers(campus),
+                    ),
+                  ],
+                ),
+              ),
+
+              // 2. GRADIENT OVERLAYS
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          Colors.black.withOpacity(0.6),
+                          Colors.transparent,
+                          Colors.transparent,
+                          Colors.black.withOpacity(0.8),
+                        ],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+              // 3. BARRA SUPERIOR: SELECTOR DE CAMPUS Y DIRECCIÓN
+              if (!hasActiveBooking)
+                Positioned(
+                  top: 50,
+                  left: 20,
+                  right: 20,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: AppColors.surface.withOpacity(0.9),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: AppColors.primary.withOpacity(0.2), width: 1),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.4),
+                          blurRadius: 10,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Row(
+                              children: [
+                                Builder(
+                                  builder: (context) => IconButton(
+                                    icon: const Icon(Icons.menu, color: AppColors.primary),
+                                    onPressed: () => Scaffold.of(context).openDrawer(),
+                                    padding: EdgeInsets.zero,
+                                    constraints: const BoxConstraints(),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                const Text(
+                                  'Punto de Salida',
+                                  style: TextStyle(
+                                    color: AppColors.textSecondary,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            DropdownButton<String>(
+                              value: _selectedCampus,
+                              dropdownColor: AppColors.surface,
+                              underline: const SizedBox(),
+                              icon: const Icon(Icons.arrow_drop_down, color: AppColors.primary),
+                              style: const TextStyle(
+                                color: AppColors.textPrimary,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              items: _campusData.keys.map((String value) {
+                                return DropdownMenuItem<String>(
+                                  value: value,
+                                  child: Text('Campus $value'),
+                                );
+                              }).toList(),
+                              onChanged: (newValue) {
+                                if (newValue != null) {
+                                  setState(() {
+                                    _selectedCampus = newValue;
+                                    final data = _campusData[newValue]!;
+                                    _mockLat = data['lat'];
+                                    _mockLng = data['lng'];
+                                    _mockAddress = data['address'];
+                                  });
+                                }
+                              },
+                            ),
+                          ],
+                        ),
+                        const Divider(color: Colors.grey, height: 16),
+                        Row(
+                          children: [
+                            const Icon(Icons.my_location, color: Colors.blueAccent, size: 18),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _mockAddress,
+                                style: const TextStyle(
+                                  color: AppColors.textPrimary,
+                                  fontSize: 14,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ),
+                          ],
+                        )
+                      ],
+                    ),
+                  ),
+                )
+              else
+                Positioned(
+                  top: 50,
+                  left: 20,
+                  right: 20,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: AppColors.surface.withOpacity(0.95),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: AppColors.primary.withOpacity(0.3), width: 1),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.4),
+                          blurRadius: 10,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            Builder(
+                              builder: (context) => IconButton(
+                                icon: const Icon(Icons.menu, color: AppColors.primary),
+                                onPressed: () => Scaffold.of(context).openDrawer(),
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            const Text(
+                              'Mi Viaje Activo',
+                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                            ),
+                          ],
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.refresh, color: AppColors.primary),
+                          onPressed: () {
+                            context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+              // 4. PANEL INFERIOR DINÁMICO
+              Positioned(
+                bottom: 20,
+                left: 20,
+                right: 20,
+                child: hasActiveBooking 
+                    ? _buildActiveBookingDashboard(currentUserId)
+                    : _buildDefaultControlPanel(),
+              ),
+
+              // Loading overlay
+              if (_isActionLoading)
+                Positioned.fill(
+                  child: Container(
+                    color: Colors.black45,
+                    child: const Center(
+                      child: CircularProgressIndicator(color: AppColors.primary),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildDefaultControlPanel() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          margin: const EdgeInsets.only(bottom: 12),
+          decoration: BoxDecoration(
+            color: Colors.blueAccent.withOpacity(0.15),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.blueAccent.withOpacity(0.3)),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.radar, color: Colors.blueAccent, size: 16),
+              SizedBox(width: 6),
+              Text(
+                'Escaneo de rutas dentro de 500 metros activado',
+                style: TextStyle(
+                  color: Colors.blueAccent,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: AppColors.surface.withOpacity(0.95),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: Colors.white.withOpacity(0.08)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.5),
+                blurRadius: 15,
+                offset: const Offset(0, -4),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                '¿Listo para tu viaje diario?',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Viaja seguro, comparte gastos y reduce la huella de carbono.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 12,
+                ),
+              ),
+              const SizedBox(height: 18),
+              
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () async {
+                        await Navigator.pushNamed(
+                          context,
+                          '/nearby-bookings',
+                          arguments: {
+                            'campus': _selectedCampus,
+                            'lat': _mockLat,
+                            'lng': _mockLng,
+                          },
+                        );
+                        // Al volver, refrescar el estado del dashboard
+                        if (mounted) {
+                          context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+                        }
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      icon: const Icon(Icons.search, color: Colors.black),
+                      label: const Text(
+                        'Buscar Rutas',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.pushNamed(
+                          context,
+                          '/create-announcement',
+                          arguments: {
+                            'campus': _selectedCampus,
+                            'lat': _mockLat,
+                            'lng': _mockLng,
+                          },
+                        );
+                      },
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.primary,
+                        side: const BorderSide(color: AppColors.primary),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      icon: const Icon(Icons.add_road_rounded),
+                      label: const Text(
+                        'Crear Anuncio',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildActiveBookingDashboard(int currentUserId) {
+    final booking = _currentBooking!;
+    final isLeader = booking.leaderId == currentUserId;
+    
+    String statusText = 'Grupo Abierto';
+    Color statusColor = Colors.greenAccent;
+    IconData statusIcon = Icons.lock_open;
+    
+    if (booking.status == 'LOCKED') {
+      statusText = 'Buscando Conductor';
+      statusColor = Colors.orangeAccent;
+      statusIcon = Icons.radar;
+    }
+    
+    if (_currentTrip != null) {
+      final tripStatus = _currentTrip!['status'];
+      if (tripStatus == 'ACCEPTED') {
+        statusText = 'Conductor en Camino';
+        statusColor = Colors.blueAccent;
+        statusIcon = Icons.directions_car;
+      } else if (tripStatus == 'ACTIVE') {
+        statusText = 'En Viaje';
+        statusColor = AppColors.primary;
+        statusIcon = Icons.navigation;
+      } else if (tripStatus == 'COMPLETED') {
+        statusText = 'Viaje Terminado';
+        statusColor = Colors.green;
+        statusIcon = Icons.check_circle;
+      }
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppColors.surface.withOpacity(0.95),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.5),
+            blurRadius: 15,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Icon(statusIcon, color: statusColor, size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    statusText,
+                    style: TextStyle(
+                      color: statusColor,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15,
+                    ),
+                  ),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  'Grupo #${booking.id}',
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+              )
+            ],
+          ),
+          const Divider(color: Colors.white12, height: 20),
+
+          if (_currentRoute != null) ...[
+            Row(
+              children: [
+                const Icon(Icons.location_on, color: AppColors.primary, size: 16),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _currentRoute!.destination.address,
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                const Icon(Icons.straighten, color: AppColors.primary, size: 16),
+                const SizedBox(width: 8),
+                Text(
+                  'Distancia: ${_currentRoute!.totalDistanceKm.toStringAsFixed(1)} km',
+                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+                ),
+                const SizedBox(width: 12),
+                const Icon(Icons.payments_outlined, color: AppColors.primary, size: 16),
+                const SizedBox(width: 4),
+                Text(
+                  'Costo total: S/ ${(10.0 + _currentRoute!.totalDistanceKm * 1.5).toStringAsFixed(2)}',
+                  style: const TextStyle(color: AppColors.primary, fontSize: 12, fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+          ],
+
+          if (booking.securityPin != null) ...[
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.3),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.primary.withOpacity(0.2)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('PIN de Seguridad', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                      SizedBox(height: 2),
+                      Text('Muéstralo al conductor al subir', style: TextStyle(color: AppColors.textSecondary, fontSize: 10)),
+                    ],
+                  ),
+                  Text(
+                    booking.securityPin!,
+                    style: const TextStyle(color: AppColors.primary, fontSize: 20, fontWeight: FontWeight.bold, letterSpacing: 2),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+
+          const Text('Pasajeros en el Grupo:', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 6),
+          ...booking.passengers.map((p) {
+            final isSelf = p.studentId == currentUserId;
+            final isL = p.role.toUpperCase() == 'LEADER';
+            return Container(
+              margin: const EdgeInsets.only(bottom: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.02),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      Icon(isL ? Icons.star : Icons.person, color: isL ? AppColors.primary : Colors.white70, size: 16),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Estudiante #${p.studentId} ${isSelf ? "(Tú)" : ""}',
+                        style: TextStyle(color: isSelf ? AppColors.primary : Colors.white70, fontSize: 12, fontWeight: isSelf ? FontWeight.bold : FontWeight.normal),
+                      ),
+                    ],
+                  ),
+                  if (isLeader && !isSelf && _currentTrip != null) 
+                    GestureDetector(
+                      onTap: () => _showPaymentMethodSelector(booking.id, p.studentId),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: p.paymentStatus == 'PAID' ? Colors.green.withOpacity(0.2) : Colors.orangeAccent.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: p.paymentStatus == 'PAID' ? Colors.green : Colors.orangeAccent),
+                        ),
+                        child: Text(
+                          p.paymentStatus == 'PAID' ? 'PAGADO (${p.paymentMethod})' : 'MARCAR PAGO',
+                          style: TextStyle(color: p.paymentStatus == 'PAID' ? Colors.green : Colors.orangeAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    )
+                  else
+                    Text(
+                      p.paymentStatus == 'PAID' ? '✓ Pagado' : 'Pendiente',
+                      style: TextStyle(color: p.paymentStatus == 'PAID' ? Colors.green : Colors.orangeAccent, fontSize: 11),
+                    )
+                ],
+              ),
+            );
+          }),
+
+          const SizedBox(height: 16),
+
+          if (booking.status == 'OPEN' || booking.status == 'LOCKED' || booking.status == 'FULL') ...[
+            if (booking.status == 'OPEN' && isLeader) ...[
+              ElevatedButton.icon(
+                onPressed: _isActionLoading ? null : () {
+                  context.read<RoutesBloc>().add(LockAndPublishBookingEvent(
+                    bookingId: booking.id,
+                    routeId: booking.routeId,
+                    campus: _selectedCampus,
+                    securityCode: booking.securityPin ?? '1234',
+                    totalDistanceKm: _currentRoute?.totalDistanceKm ?? 5.0,
+                    passengerIds: booking.passengers.map((p) => p.studentId).toList(),
+                  ));
+                },
+                icon: const Icon(Icons.publish, color: Colors.black),
+                label: const Text('Cerrar Grupo y Buscar Conductor', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+              ),
+              const SizedBox(height: 8),
+            ],
+            if (isLeader)
+              OutlinedButton.icon(
+                onPressed: _isActionLoading ? null : () {
+                  context.read<RoutesBloc>().add(CancelBookingEvent(booking.id));
+                },
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.redAccent,
+                  side: const BorderSide(color: Colors.redAccent),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+                icon: const Icon(Icons.cancel),
+                label: const Text('Cancelar Grupo', style: TextStyle(fontWeight: FontWeight.bold)),
+              )
+            else
+              OutlinedButton.icon(
+                onPressed: _isActionLoading ? null : () {
+                  context.read<RoutesBloc>().add(LeaveBookingEvent(
+                    bookingId: booking.id,
+                    lat: _mockLat,
+                    lng: _mockLng,
+                  ));
+                },
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.redAccent,
+                  side: const BorderSide(color: Colors.redAccent),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+                icon: const Icon(Icons.exit_to_app),
+                label: const Text('Salir del Grupo', style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+          ] else if (_currentTrip != null && _currentTrip!['status'] == 'ACTIVE') ...[
+            if (!isLeader)
+              _buildConfirmArrivalButton(currentUserId),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildConfirmArrivalButton(int currentUserId) {
+    if (_currentTrip == null || _currentTrip!['passengers'] == null) return const SizedBox.shrink();
+    final passengersList = _currentTrip!['passengers'] as List;
+    final selfPass = passengersList.firstWhere(
+      (p) => p['passengerId'] == currentUserId,
+      orElse: () => null,
+    );
+    if (selfPass == null) return const SizedBox.shrink();
+    final bool arrived = selfPass['hasArrived'] ?? false;
+    
+    if (arrived) {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.green.withOpacity(0.15),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.green),
+        ),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.check_circle, color: Colors.green),
+            SizedBox(width: 8),
+            Text(
+              'Llegaste a salvo a casa',
+              style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+      );
+    } else {
+      return ElevatedButton.icon(
+        onPressed: _isActionLoading ? null : () {
+          context.read<RoutesBloc>().add(ConfirmArrivalEvent(
+            tripId: _currentTrip!['id'],
+            passengerId: currentUserId,
+          ));
+        },
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.greenAccent,
+          padding: const EdgeInsets.symmetric(vertical: 14),
+        ),
+        icon: const Icon(Icons.home, color: Colors.black),
+        label: const Text('Confirmar Llegada a Salvo', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+      );
+    }
+  }
 }

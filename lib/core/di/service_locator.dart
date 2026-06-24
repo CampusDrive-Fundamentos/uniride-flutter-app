@@ -115,5 +115,6 @@ Future<void> init() async {
         createRouteAndBookingUseCase: sl(),
         searchNearbyBookingsUseCase: sl(),
         joinBookingUseCase: sl(),
+        repository: sl(),
       ));
 }

@@ -47,3 +47,38 @@ class RoutesError extends RoutesState {
   @override
   List<Object?> get props => [message];
 }
+
+class CurrentBookingLoaded extends RoutesState {
+  final BookingEntity booking;
+
+  const CurrentBookingLoaded(this.booking);
+
+  @override
+  List<Object?> get props => [booking];
+}
+
+class CurrentBookingEmpty extends RoutesState {}
+
+class LockAndPublishSuccess extends RoutesState {
+  final BookingEntity booking;
+
+  const LockAndPublishSuccess(this.booking);
+
+  @override
+  List<Object?> get props => [booking];
+}
+
+class LeaveBookingSuccess extends RoutesState {}
+
+class CancelBookingSuccess extends RoutesState {}
+
+class ConfirmArrivalSuccess extends RoutesState {}
+
+class UpdatePaymentSuccess extends RoutesState {
+  final BookingEntity booking;
+
+  const UpdatePaymentSuccess(this.booking);
+
+  @override
+  List<Object?> get props => [booking];
+}

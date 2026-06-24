@@ -8,12 +8,16 @@ class CreateRouteAndBookingParams {
   final String destinationAddress;
   final double destinationLat;
   final double destinationLng;
+  final double startLat;
+  final double startLng;
 
   CreateRouteAndBookingParams({
     required this.campus,
     required this.destinationAddress,
     required this.destinationLat,
     required this.destinationLng,
+    required this.startLat,
+    required this.startLng,
   });
 }
 
@@ -29,6 +33,8 @@ class CreateRouteAndBookingUseCase {
       destinationAddress: params.destinationAddress,
       destinationLat: params.destinationLat,
       destinationLng: params.destinationLng,
+      startLat: params.startLat,
+      startLng: params.startLng,
     );
 
     return await routeResult.fold(
@@ -40,20 +46,9 @@ class CreateRouteAndBookingUseCase {
         return await bookingResult.fold(
           (failure) async => Left(failure),
           (booking) async {
-            // 3. Crear automáticamente el viaje en estado REQUESTED para la bolsa de viajes
-            final tripResult = await repository.createTrip(
-              bookingId: booking.id,
-              routeId: route.id,
-              campus: params.campus,
-              securityCode: booking.securityPin ?? '0000',
-              totalAmount: 10.0 + (route.totalDistanceKm * 1.5),
-              passengerIds: [booking.leaderId],
-            );
-            
-            return tripResult.fold(
-              (failure) => Left(failure),
-              (_) => Right(booking),
-            );
+            // Retornamos directamente la reserva (Booking).
+            // El viaje se creará recién cuando el Líder decida publicar/buscar conductor (Lock).
+            return Right(booking);
           },
         );
       },
