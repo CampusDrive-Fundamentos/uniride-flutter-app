@@ -15,6 +15,8 @@ import '../blocs/routes_event.dart';
 import '../blocs/routes_state.dart';
 import '../../domain/entities/booking_entity.dart';
 import '../../domain/entities/route_entity.dart';
+import '../../domain/entities/passenger_entity.dart';
+import '../../domain/entities/location.dart';
 
 class StudentHomePage extends StatefulWidget {
   const StudentHomePage({super.key});
@@ -254,6 +256,30 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
     }
 
     return markers;
+  }
+
+  double _calculatePassengerPrice(PassengerEntity p, BookingEntity booking) {
+    if (_currentRoute == null) return 0.0;
+    
+    final int totalStudents = booking.passengers.length;
+    if (totalStudents == 0) return 0.0;
+    
+    final double baseShare = 10.0 / totalStudents;
+    double distance = 0.0;
+    
+    final isL = p.role.toUpperCase() == 'LEADER';
+    if (isL) {
+      distance = _currentRoute!.totalDistanceKm;
+    } else {
+      for (var wp in _currentRoute!.waypoints) {
+        if (wp.passengerId == p.studentId) {
+          distance = wp.distanceFromStartKm ?? 0.0;
+          break;
+        }
+      }
+    }
+    
+    return baseShare + (distance * 1.5);
   }
 
   @override
@@ -820,7 +846,7 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                 const Icon(Icons.straighten, color: AppColors.primary, size: 16),
                 const SizedBox(width: 8),
                 Text(
-                  'Distancia: ${_currentRoute!.totalDistanceKm.toStringAsFixed(1)} km',
+                  'Distancia total: ${_currentRoute!.totalDistanceKm.toStringAsFixed(1)} km',
                   style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
                 ),
                 const SizedBox(width: 12),
@@ -830,6 +856,35 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                   'Costo total: S/ ${(10.0 + _currentRoute!.totalDistanceKm * 1.5).toStringAsFixed(2)}',
                   style: const TextStyle(color: AppColors.primary, fontSize: 12, fontWeight: FontWeight.bold),
                 ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                const Icon(Icons.account_balance_wallet_outlined, color: Colors.greenAccent, size: 16),
+                const SizedBox(width: 8),
+                Builder(builder: (context) {
+                  final me = booking.passengers.firstWhere(
+                    (p) => p.studentId == currentUserId,
+                    orElse: () => booking.passengers.first,
+                  );
+                  final double price = _calculatePassengerPrice(me, booking);
+                  double distance = me.role.toUpperCase() == 'LEADER'
+                      ? _currentRoute!.totalDistanceKm
+                      : 0.0;
+                  if (me.role.toUpperCase() != 'LEADER') {
+                    for (var wp in _currentRoute!.waypoints) {
+                      if (wp.passengerId == currentUserId) {
+                        distance = wp.distanceFromStartKm ?? 0.0;
+                        break;
+                      }
+                    }
+                  }
+                  return Text(
+                    'Tu precio justo: S/ ${price.toStringAsFixed(2)} (${distance.toStringAsFixed(1)} km recorridos)',
+                    style: const TextStyle(color: Colors.greenAccent, fontSize: 12, fontWeight: FontWeight.bold),
+                  );
+                }),
               ],
             ),
             const SizedBox(height: 12),
@@ -883,9 +938,33 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                     children: [
                       Icon(isL ? Icons.star : Icons.person, color: isL ? AppColors.primary : Colors.white70, size: 16),
                       const SizedBox(width: 8),
-                      Text(
-                        'Estudiante #${p.studentId} ${isSelf ? "(Tú)" : ""}',
-                        style: TextStyle(color: isSelf ? AppColors.primary : Colors.white70, fontSize: 12, fontWeight: isSelf ? FontWeight.bold : FontWeight.normal),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Estudiante #${p.studentId} ${isSelf ? "(Tú)" : ""}',
+                            style: TextStyle(color: isSelf ? AppColors.primary : Colors.white70, fontSize: 12, fontWeight: isSelf ? FontWeight.bold : FontWeight.normal),
+                          ),
+                          const SizedBox(height: 2),
+                          Builder(builder: (context) {
+                            final double price = _calculatePassengerPrice(p, booking);
+                            double distance = isL
+                                ? _currentRoute!.totalDistanceKm
+                                : 0.0;
+                            if (!isL) {
+                              for (var wp in _currentRoute!.waypoints) {
+                                if (wp.passengerId == p.studentId) {
+                                  distance = wp.distanceFromStartKm ?? 0.0;
+                                  break;
+                                }
+                              }
+                            }
+                            return Text(
+                              'Precio justo: S/ ${price.toStringAsFixed(2)} (${distance.toStringAsFixed(1)} km)',
+                              style: const TextStyle(color: Colors.grey, fontSize: 10),
+                            );
+                          }),
+                        ],
                       ),
                     ],
                   ),
@@ -956,10 +1035,21 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
               // BOTÓN PARA SEGUIDORES: Llama al Endpoint de Salir (/leave)
               OutlinedButton.icon(
                 onPressed: _isActionLoading ? null : () {
+                  double lat = _mockLat;
+                  double lng = _mockLng;
+                  if (_currentRoute != null) {
+                    for (var wp in _currentRoute!.waypoints) {
+                      if (wp.passengerId == currentUserId) {
+                        lat = wp.latitude;
+                        lng = wp.longitude;
+                        break;
+                      }
+                    }
+                  }
                   context.read<RoutesBloc>().add(LeaveBookingEvent(
                     bookingId: booking.id,
-                    lat: _mockLat,
-                    lng: _mockLng,
+                    lat: lat,
+                    lng: lng,
                   ));
                 },
                 style: OutlinedButton.styleFrom(
