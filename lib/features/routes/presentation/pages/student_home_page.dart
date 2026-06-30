@@ -16,7 +16,6 @@ import '../blocs/routes_state.dart';
 import '../../domain/entities/booking_entity.dart';
 import '../../domain/entities/route_entity.dart';
 import '../../domain/entities/passenger_entity.dart';
-import '../../domain/entities/location.dart';
 
 class StudentHomePage extends StatefulWidget {
   const StudentHomePage({super.key});

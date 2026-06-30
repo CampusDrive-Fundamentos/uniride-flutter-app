@@ -86,7 +86,7 @@ class ProfileRepositoryImpl implements ProfileRepository {
   User _mapDtoToEntity(UserProfileResponseDto dto) {
     if (dto.role == 'DRIVER') {
       return Driver(
-        id: 0,
+        id: dto.id,
         firstName: dto.firstName,
         lastName: dto.lastName,
         username: dto.email.split('@')[0],
@@ -104,7 +104,7 @@ class ProfileRepositoryImpl implements ProfileRepository {
       );
     } else {
       return Student(
-        id: 0,
+        id: dto.id,
         firstName: dto.firstName,
         lastName: dto.lastName,
         username: dto.email.split('@')[0],
