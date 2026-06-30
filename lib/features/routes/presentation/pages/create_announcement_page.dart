@@ -29,6 +29,7 @@ class _CreateAnnouncementPageState extends State<CreateAnnouncementPage> {
     'SAN ISIDRO': ['Puerta Principal (Salaverry)', 'Puerta Posterior (Huascar)'],
     'VILLA': ['Puerta Principal (Al. San Marcos)', 'Puerta 2'],
     'SAN MIGUEL': ['Puerta Principal (La Marina)', 'Puerta 2 (Parque de las Leyendas)'],
+    'UNMSM': ['Puerta 1 (Venezuela)', 'Puerta 3 (Universitaria)', 'Puerta 7 (Amézaga)'],
   };
 
   // Coordenadas para el destino (seleccionadas interactiva en mapa)
@@ -60,6 +61,7 @@ class _CreateAnnouncementPageState extends State<CreateAnnouncementPage> {
     'SAN ISIDRO': const LatLng(-12.0875, -77.0501),
     'VILLA': const LatLng(-12.2036, -77.0125),
     'SAN MIGUEL': const LatLng(-12.0772, -77.0937),
+    'UNMSM': const LatLng(-12.0559, -77.0817),
   };
 
   @override

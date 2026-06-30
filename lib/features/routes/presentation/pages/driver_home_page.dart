@@ -55,6 +55,12 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
       'address': 'Av. La Marina 2810, San Miguel',
       'dbName': 'UPC_SAN_MIGUEL',
     },
+    'UNMSM': {
+      'lat': -12.0559,
+      'lng': -77.0817,
+      'address': 'Av. Universitaria / Av. Venezuela, Lima',
+      'dbName': 'UNMSM',
+    },
   };
 
   @override

@@ -41,7 +41,7 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
   bool _isActionLoading = false;
   int? _cachedUserId;
 
-  // Opciones de campus de la UPC con sus coordenadas reales aproximadas
+  // Opciones de campus con sus coordenadas reales aproximadas
   final Map<String, Map<String, dynamic>> _campusData = {
     'MONTERRICO': {
       'lat': -12.1042,
@@ -62,6 +62,11 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
       'lat': -12.0772,
       'lng': -77.0937,
       'address': 'Av. La Marina 2810, San Miguel',
+    },
+    'UNMSM': {
+      'lat': -12.0559,
+      'lng': -77.0817,
+      'address': 'Av. Universitaria / Av. Venezuela, Lima',
     },
   };
 

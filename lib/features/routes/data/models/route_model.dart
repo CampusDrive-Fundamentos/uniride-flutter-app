@@ -24,6 +24,8 @@ class RouteModel extends RouteEntity {
         return 'SAN MIGUEL';
       case 'UPC_VILLA':
         return 'VILLA';
+      case 'UNMSM':
+        return 'UNMSM';
       default:
         return backendCampus;
     }
