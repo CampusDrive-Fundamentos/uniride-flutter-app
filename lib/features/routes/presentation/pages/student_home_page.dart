@@ -257,28 +257,59 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
     return markers;
   }
 
-  double _calculatePassengerPrice(PassengerEntity p, BookingEntity booking) {
-    if (_currentRoute == null) return 0.0;
-    
+  Map<int, double> _calculateFairPrices(BookingEntity booking) {
+    final Map<int, double> prices = {};
+    final route = _currentRoute;
+    if (route == null || booking.passengers.isEmpty) return prices;
+
     final int totalStudents = booking.passengers.length;
-    if (totalStudents == 0) return 0.0;
-    
     final double baseShare = 10.0 / totalStudents;
-    double distance = 0.0;
-    
-    final isL = p.role.toUpperCase() == 'LEADER';
-    if (isL) {
-      distance = _currentRoute!.totalDistanceKm;
-    } else {
-      for (var wp in _currentRoute!.waypoints) {
-        if (wp.passengerId == p.studentId) {
-          distance = wp.distanceFromStartKm ?? 0.0;
-          break;
+
+    // 1. Obtener la distancia de cada pasajero
+    final List<MapEntry<PassengerEntity, double>> passengersWithDistance = [];
+    for (var p in booking.passengers) {
+      double dist = 0.0;
+      if (p.role.toUpperCase() == 'LEADER') {
+        dist = route.totalDistanceKm;
+      } else {
+        for (var wp in route.waypoints) {
+          if (wp.passengerId == p.studentId) {
+            dist = wp.distanceFromStartKm ?? 0.0;
+            break;
+          }
         }
       }
+      passengersWithDistance.add(MapEntry(p, dist));
     }
-    
-    return baseShare + (distance * 1.5);
+
+    // 2. Ordenar por distancia ascendente
+    passengersWithDistance.sort((a, b) => a.value.compareTo(b.value));
+
+    // Inicializar precios con el costo base
+    for (var p in booking.passengers) {
+      prices[p.studentId] = baseShare;
+    }
+
+    // 3. Calcular costo por segmentos
+    double prevDistance = 0.0;
+    for (int i = 0; i < passengersWithDistance.length; i++) {
+      final double currentDistance = passengersWithDistance[i].value;
+      final double segmentLength = currentDistance - prevDistance;
+      
+      if (segmentLength > 0.001) {
+        final int passengersInSegment = passengersWithDistance.length - i;
+        final double segmentCost = segmentLength * 1.5;
+        final double sharePerPassenger = segmentCost / passengersInSegment;
+
+        for (int j = i; j < passengersWithDistance.length; j++) {
+          final int studentId = passengersWithDistance[j].key.studentId;
+          prices[studentId] = (prices[studentId] ?? 0.0) + sharePerPassenger;
+        }
+      }
+      prevDistance = currentDistance;
+    }
+
+    return prices;
   }
 
   @override
@@ -733,6 +764,7 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
 
   Widget _buildActiveBookingDashboard(int currentUserId) {
     final booking = _currentBooking!;
+    final route = _currentRoute;
     
     // LÓGICA REFORZADA PARA DETERMINAR SI ERES EL LÍDER
     bool isLeader = booking.leaderId == currentUserId;
@@ -825,14 +857,14 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
           ),
           const Divider(color: Colors.white12, height: 20),
 
-          if (_currentRoute != null) ...[
+          if (route != null) ...[
             Row(
               children: [
                 const Icon(Icons.location_on, color: AppColors.primary, size: 16),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    _currentRoute!.destination.address,
+                    route.destination.address,
                     style: const TextStyle(color: Colors.white, fontSize: 13),
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -845,14 +877,14 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                 const Icon(Icons.straighten, color: AppColors.primary, size: 16),
                 const SizedBox(width: 8),
                 Text(
-                  'Distancia total: ${_currentRoute!.totalDistanceKm.toStringAsFixed(1)} km',
+                  'Distancia total: ${route.totalDistanceKm.toStringAsFixed(1)} km',
                   style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
                 ),
                 const SizedBox(width: 12),
                 const Icon(Icons.payments_outlined, color: AppColors.primary, size: 16),
                 const SizedBox(width: 4),
                 Text(
-                  'Costo total: S/ ${(10.0 + _currentRoute!.totalDistanceKm * 1.5).toStringAsFixed(2)}',
+                  'Costo total: S/ ${(10.0 + route.totalDistanceKm * 1.5).toStringAsFixed(2)}',
                   style: const TextStyle(color: AppColors.primary, fontSize: 12, fontWeight: FontWeight.bold),
                 ),
               ],
@@ -862,17 +894,26 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
               children: [
                 const Icon(Icons.account_balance_wallet_outlined, color: Colors.greenAccent, size: 16),
                 const SizedBox(width: 8),
-                Builder(builder: (context) {
-                  final me = booking.passengers.firstWhere(
-                    (p) => p.studentId == currentUserId,
-                    orElse: () => booking.passengers.first,
-                  );
-                  final double price = _calculatePassengerPrice(me, booking);
+                 Builder(builder: (context) {
+                  if (booking.passengers.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
+                  PassengerEntity? me;
+                  for (var p in booking.passengers) {
+                    if (p.studentId == currentUserId) {
+                      me = p;
+                      break;
+                    }
+                  }
+                  me ??= booking.passengers.first;
+
+                  final prices = _calculateFairPrices(booking);
+                  final double price = prices[me.studentId] ?? 0.0;
                   double distance = me.role.toUpperCase() == 'LEADER'
-                      ? _currentRoute!.totalDistanceKm
+                      ? route.totalDistanceKm
                       : 0.0;
                   if (me.role.toUpperCase() != 'LEADER') {
-                    for (var wp in _currentRoute!.waypoints) {
+                    for (var wp in route.waypoints) {
                       if (wp.passengerId == currentUserId) {
                         distance = wp.distanceFromStartKm ?? 0.0;
                         break;
@@ -920,76 +961,83 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
 
           const Text('Pasajeros en el Grupo:', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
           const SizedBox(height: 6),
-          ...booking.passengers.map((p) {
-            final isSelf = p.studentId == currentUserId || (isLeader && p.role.toUpperCase() == 'LEADER');
-            final isL = p.role.toUpperCase() == 'LEADER';
-            return Container(
-              margin: const EdgeInsets.only(bottom: 6),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.02),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(
+          Builder(builder: (context) {
+            final r = route;
+            if (r == null) {
+              return const SizedBox.shrink();
+            }
+            final prices = _calculateFairPrices(booking);
+            return Column(
+              children: booking.passengers.map((p) {
+                final isSelf = p.studentId == currentUserId || (isLeader && p.role.toUpperCase() == 'LEADER');
+                final isL = p.role.toUpperCase() == 'LEADER';
+                final double price = prices[p.studentId] ?? 0.0;
+                double distance = isL
+                    ? r.totalDistanceKm
+                    : 0.0;
+                if (!isL) {
+                  for (var wp in r.waypoints) {
+                    if (wp.passengerId == p.studentId) {
+                      distance = wp.distanceFromStartKm ?? 0.0;
+                      break;
+                    }
+                  }
+                }
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.02),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Icon(isL ? Icons.star : Icons.person, color: isL ? AppColors.primary : Colors.white70, size: 16),
-                      const SizedBox(width: 8),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                      Row(
                         children: [
-                          Text(
-                            'Estudiante #${p.studentId} ${isSelf ? "(Tú)" : ""}',
-                            style: TextStyle(color: isSelf ? AppColors.primary : Colors.white70, fontSize: 12, fontWeight: isSelf ? FontWeight.bold : FontWeight.normal),
+                          Icon(isL ? Icons.star : Icons.person, color: isL ? AppColors.primary : Colors.white70, size: 16),
+                          const SizedBox(width: 8),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Estudiante #${p.studentId} ${isSelf ? "(Tú)" : ""}',
+                                style: TextStyle(color: isSelf ? AppColors.primary : Colors.white70, fontSize: 12, fontWeight: isSelf ? FontWeight.bold : FontWeight.normal),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                'Precio justo: S/ ${price.toStringAsFixed(2)} (${distance.toStringAsFixed(1)} km)',
+                                style: const TextStyle(color: Colors.grey, fontSize: 10),
+                              ),
+                            ],
                           ),
-                          const SizedBox(height: 2),
-                          Builder(builder: (context) {
-                            final double price = _calculatePassengerPrice(p, booking);
-                            double distance = isL
-                                ? _currentRoute!.totalDistanceKm
-                                : 0.0;
-                            if (!isL) {
-                              for (var wp in _currentRoute!.waypoints) {
-                                if (wp.passengerId == p.studentId) {
-                                  distance = wp.distanceFromStartKm ?? 0.0;
-                                  break;
-                                }
-                              }
-                            }
-                            return Text(
-                              'Precio justo: S/ ${price.toStringAsFixed(2)} (${distance.toStringAsFixed(1)} km)',
-                              style: const TextStyle(color: Colors.grey, fontSize: 10),
-                            );
-                          }),
                         ],
                       ),
+                      if (isLeader && !isSelf && _currentTrip != null) 
+                        GestureDetector(
+                          onTap: () => _showPaymentMethodSelector(booking.id, p.studentId),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: p.paymentStatus == 'PAID' ? Colors.green.withOpacity(0.2) : Colors.orangeAccent.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(color: p.paymentStatus == 'PAID' ? Colors.green : Colors.orangeAccent),
+                            ),
+                            child: Text(
+                              p.paymentStatus == 'PAID' ? 'PAGADO (${p.paymentMethod})' : 'MARCAR PAGO',
+                              style: TextStyle(color: p.paymentStatus == 'PAID' ? Colors.green : Colors.orangeAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        )
+                      else
+                        Text(
+                          p.paymentStatus == 'PAID' ? '✓ Pagado' : 'Pendiente',
+                          style: TextStyle(color: p.paymentStatus == 'PAID' ? Colors.green : Colors.orangeAccent, fontSize: 11),
+                        )
                     ],
                   ),
-                  if (isLeader && !isSelf && _currentTrip != null) 
-                    GestureDetector(
-                      onTap: () => _showPaymentMethodSelector(booking.id, p.studentId),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: p.paymentStatus == 'PAID' ? Colors.green.withOpacity(0.2) : Colors.orangeAccent.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(4),
-                          border: Border.all(color: p.paymentStatus == 'PAID' ? Colors.green : Colors.orangeAccent),
-                        ),
-                        child: Text(
-                          p.paymentStatus == 'PAID' ? 'PAGADO (${p.paymentMethod})' : 'MARCAR PAGO',
-                          style: TextStyle(color: p.paymentStatus == 'PAID' ? Colors.green : Colors.orangeAccent, fontSize: 10, fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                    )
-                  else
-                    Text(
-                      p.paymentStatus == 'PAID' ? '✓ Pagado' : 'Pendiente',
-                      style: TextStyle(color: p.paymentStatus == 'PAID' ? Colors.green : Colors.orangeAccent, fontSize: 11),
-                    )
-                ],
-              ),
+                );
+              }).toList(),
             );
           }),
 
