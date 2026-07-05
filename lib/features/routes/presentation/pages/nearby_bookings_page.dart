@@ -327,11 +327,17 @@ class _NearbyBookingsPageState extends State<NearbyBookingsPage> with SingleTick
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: AppColors.primary),
           onPressed: () {
-            Navigator.of(context).maybePop();
+            Navigator.of(context).pop(widget.campus);
           },
         ),
       ),
-      body: BlocConsumer<RoutesBloc, RoutesState>(
+      body: PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, result) {
+          if (didPop) return;
+          Navigator.pop(context, widget.campus);
+        },
+        child: BlocConsumer<RoutesBloc, RoutesState>(
         listener: (context, state) {
           if (state is JoinedBookingSuccess) {
             _showSuccessScreen(state.booking);
@@ -726,9 +732,11 @@ class _NearbyBookingsPageState extends State<NearbyBookingsPage> with SingleTick
         },
       ),
     ),
-  );
+    ),
+    );
+  }
 }
-}
+
 
 // Pintor de radar animado futurista
 class _RadarScannerPainter extends CustomPainter {

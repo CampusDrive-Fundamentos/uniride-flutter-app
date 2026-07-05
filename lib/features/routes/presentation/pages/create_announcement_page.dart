@@ -8,7 +8,16 @@ import '../blocs/routes_state.dart';
 import 'map_picker_page.dart';
 
 class CreateAnnouncementPage extends StatefulWidget {
-  const CreateAnnouncementPage({super.key});
+  final String? initialCampus;
+  final double? initialLat;
+  final double? initialLng;
+
+  const CreateAnnouncementPage({
+    super.key,
+    this.initialCampus,
+    this.initialLat,
+    this.initialLng,
+  });
 
   @override
   State<CreateAnnouncementPage> createState() => _CreateAnnouncementPageState();
@@ -41,18 +50,22 @@ class _CreateAnnouncementPageState extends State<CreateAnnouncementPage> {
   double? _startLng;
 
   @override
+  void initState() {
+    super.initState();
+    if (widget.initialCampus != null) {
+      _selectedCampus = widget.initialCampus!;
+      // Asegurar que la puerta de salida sea válida para el campus inicial
+      if (_gatesByCampus.containsKey(_selectedCampus)) {
+        _selectedExitGate = _gatesByCampus[_selectedCampus]!.first;
+      }
+    }
+    _startLat = widget.initialLat;
+    _startLng = widget.initialLng;
+  }
+
+  @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
-    if (args != null) {
-      setState(() {
-        _selectedCampus = args['campus'] ?? 'MONTERRICO';
-        _startLat = args['lat'];
-        _startLng = args['lng'];
-        // Reiniciar la puerta de salida para el campus recibido
-        _selectedExitGate = _gatesByCampus[_selectedCampus]!.first;
-      });
-    }
   }
 
   // Coordenadas de campus para inicializar el mapa selector
@@ -162,10 +175,16 @@ class _CreateAnnouncementPageState extends State<CreateAnnouncementPage> {
         title: const Text('Crear Anuncio de Ruta', style: TextStyle(color: Colors.white)),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: AppColors.primary),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () => Navigator.pop(context, _selectedCampus),
         ),
       ),
-      body: BlocListener<RoutesBloc, RoutesState>(
+      body: PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, result) {
+          if (didPop) return;
+          Navigator.pop(context, _selectedCampus);
+        },
+        child: BlocListener<RoutesBloc, RoutesState>(
         listener: (context, state) {
           if (state is RoutesLoading) {
             setState(() {
@@ -242,7 +261,7 @@ class _CreateAnnouncementPageState extends State<CreateAnnouncementPage> {
                   TextButton(
                     onPressed: () {
                       Navigator.pop(context); // Cerrar diálogo
-                      Navigator.pop(context); // Volver al Home
+                      Navigator.pop(context, _selectedCampus); // Volver al Home con el campus
                     },
                     child: const Text('Aceptar', style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
                   ),
@@ -306,6 +325,12 @@ class _CreateAnnouncementPageState extends State<CreateAnnouncementPage> {
                         if (value != null) {
                           setState(() {
                             _selectedCampus = value;
+                            // Actualizar coordenadas de inicio al cambiar de campus
+                            final coords = _campusCoordinates[value];
+                            if (coords != null) {
+                              _startLat = coords.latitude;
+                              _startLng = coords.longitude;
+                            }
                             // Reiniciar a la primera puerta del campus seleccionado
                             _selectedExitGate = _gatesByCampus[value]!.first;
                           });
@@ -434,6 +459,7 @@ class _CreateAnnouncementPageState extends State<CreateAnnouncementPage> {
           ],
         ),
       ),
+    ),
     );
   }
 }

@@ -40,7 +40,14 @@ class AppRouter {
         return MaterialPageRoute(builder: (_) => const ProfilePage());
       
       case '/create-announcement':
-        return MaterialPageRoute(builder: (_) => const CreateAnnouncementPage());
+        final args = settings.arguments as Map<String, dynamic>? ?? {};
+        return MaterialPageRoute(
+          builder: (_) => CreateAnnouncementPage(
+            initialCampus: args['campus'],
+            initialLat: args['lat'],
+            initialLng: args['lng'],
+          ),
+        );
       case '/nearby-bookings':
         final args = settings.arguments as Map<String, dynamic>? ?? {};
         return MaterialPageRoute(

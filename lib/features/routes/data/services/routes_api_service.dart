@@ -145,6 +145,8 @@ class RoutesApiService {
         'campus': _mapAppCampusToBackend(campus),
         'securityCode': securityCode,
         'totalAmount': totalAmount,
+        'price': totalAmount, // Aliases para asegurar que el backend reciba el precio
+        'totalPrice': totalAmount,
         'paymentMethod': 'CARD',
         'passengerIds': passengerIds,
       },

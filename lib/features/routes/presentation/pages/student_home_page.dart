@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:dio/dio.dart';
@@ -25,6 +27,8 @@ class StudentHomePage extends StatefulWidget {
 }
 
 class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProviderStateMixin {
+  final MapController _mapController = MapController();
+  final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
   String _selectedCampus = 'MONTERRICO';
   late AnimationController _pulseController;
   
@@ -40,6 +44,9 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
   List<LatLng> _routePoints = [];
   bool _isActionLoading = false;
   int? _cachedUserId;
+  String? _sessionPin; // Cache para mantener el PIN original durante la sesión
+  Timer? _tripPollingTimer; // Polling para detectar llegadas de otros pasajeros
+  final Set<String> _locallyArrivedIds = {}; // IDs que han marcado llegada localmente para feedback instantáneo
 
   // Opciones de campus con sus coordenadas reales aproximadas
   final Map<String, Map<String, dynamic>> _campusData = {
@@ -78,15 +85,58 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
       duration: const Duration(seconds: 2),
     )..repeat();
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _loadPersistedCampus();
+      if (mounted) {
+        context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+      }
     });
+  }
+
+  Future<void> _loadPersistedCampus() async {
+    try {
+      final savedCampus = await _secureStorage.read(key: 'selected_campus');
+      if (savedCampus != null && _campusData.containsKey(savedCampus)) {
+        _updateSelectedCampus(savedCampus, persist: false);
+      }
+    } catch (_) {}
   }
 
   @override
   void dispose() {
     _pulseController.dispose();
+    _stopTripPolling();
     super.dispose();
+  }
+
+  void _startTripPolling() {
+    _tripPollingTimer?.cancel();
+    _tripPollingTimer = Timer.periodic(const Duration(seconds: 4), (timer) {
+      if (mounted && _currentBooking != null) {
+        // Refrescamos tanto el viaje como la reserva principal para detectar el cierre del conductor
+        _checkActiveTrip();
+        context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+      } else {
+        _stopTripPolling();
+      }
+    });
+  }
+
+  void _stopTripPolling() {
+    _tripPollingTimer?.cancel();
+    _tripPollingTimer = null;
+  }
+
+  void _clearActiveTripSession() {
+    _stopTripPolling();
+    setState(() {
+      _currentTrip = null;
+      _currentBooking = null;
+      _currentRoute = null;
+      _routePoints = [];
+      _sessionPin = null;
+      _locallyArrivedIds.clear();
+    });
   }
 
   Future<void> _loadRouteDetails(int routeId) async {
@@ -116,22 +166,61 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
       final dio = di.sl<Dio>();
       final response = await dio.get('/api/v1/trips/current');
       if (response.statusCode == 200 && response.data != null) {
+        final dynamic rawData = response.data;
+        Map<String, dynamic> tripData = rawData is Map ? Map<String, dynamic>.from(rawData) : jsonDecode(rawData as String) as Map<String, dynamic>;
+        
+        // Sincronización agresiva: El líder necesita el detalle completo para ver llegadas
+        if (tripData['id'] != null) {
+          try {
+            final detailResp = await dio.get('/api/v1/trips/${tripData['id']}');
+            if (detailResp.statusCode == 200 && detailResp.data != null) {
+              final dynamic detailRaw = detailResp.data;
+              final fullDetail = detailRaw is Map ? Map<String, dynamic>.from(detailRaw) : jsonDecode(detailRaw as String) as Map<String, dynamic>;
+              tripData = fullDetail;
+            }
+          } catch (_) {}
+        }
+
         setState(() {
-          _currentTrip = Map<String, dynamic>.from(response.data);
+          _currentTrip = tripData;
         });
+        
+        // Si el viaje terminó, limpiamos todo para volver a la pantalla de búsqueda
+        if (_currentTrip!['status'] == 'COMPLETED' || _currentTrip!['status'] == 'CANCELLED') {
+          _clearActiveTripSession();
+          _showSnackBar('El viaje ha finalizado. ¡Gracias por usar Uniride!');
+        } else {
+          // Si el viaje está en cualquier otro estado activo (ACCEPTED, STARTED, ACTIVE, etc.)
+          // nos aseguramos de que el polling esté funcionando para detectar el fin.
+          if (_tripPollingTimer == null) _startTripPolling();
+        }
       } else {
-        setState(() {
-          _currentTrip = null;
-        });
+        // Si no hay viaje actual en el endpoint, pero teníamos uno activo, 
+        // significa que el conductor lo terminó o se canceló.
+        if (_currentTrip != null) {
+          _clearActiveTripSession();
+          _showSnackBar('El viaje ha finalizado.');
+        }
       }
     } catch (_) {
-      setState(() {
-        _currentTrip = null;
-      });
+      // En caso de error (ej. 404), si teníamos un viaje, asumimos que terminó
+      if (_currentTrip != null) {
+        _clearActiveTripSession();
+      }
     }
   }
 
   Future<void> _loadActiveBookingDetails(BookingEntity booking) async {
+    // CACHÉ DE PIN: Si el ID del booking es el mismo, mantenemos el primer PIN que vimos
+    // para evitar que los cambios del backend al cerrar el grupo confundan al usuario.
+    if (_currentBooking?.id == booking.id) {
+      if (_sessionPin == null && booking.securityPin != null) {
+        _sessionPin = booking.securityPin;
+      }
+    } else {
+      _sessionPin = booking.securityPin;
+    }
+
     setState(() {
       _currentBooking = booking;
     });
@@ -317,6 +406,26 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
     return prices;
   }
 
+  void _updateSelectedCampus(String newCampus, {bool persist = true}) async {
+    if (_campusData.containsKey(newCampus)) {
+      final data = _campusData[newCampus]!;
+      setState(() {
+        _selectedCampus = newCampus;
+        _mockLat = data['lat'];
+        _mockLng = data['lng'];
+        _mockAddress = data['address'];
+      });
+      _mapController.move(
+        LatLng(data['lat'], data['lng']),
+        14.0,
+      );
+
+      if (persist) {
+        await _secureStorage.write(key: 'selected_campus', value: newCampus);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final profileState = context.watch<ProfileBloc>().state;
@@ -354,41 +463,44 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
             _currentRoute = null;
             _currentTrip = null;
             _routePoints = [];
+            _sessionPin = null;
+            _locallyArrivedIds.clear();
           });
         } else if (state is RouteAndBookingCreated) {
           setState(() {
             _isActionLoading = false;
+            _locallyArrivedIds.clear();
           });
-          context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+          // Cargamos los detalles directamente desde la entidad creada para evitar saltos de PIN
+          _loadActiveBookingDetails(state.booking);
         } else if (state is JoinedBookingSuccess) {
           setState(() {
             _isActionLoading = false;
+            _locallyArrivedIds.clear();
           });
-          context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+          _loadActiveBookingDetails(state.booking);
         } else if (state is LockAndPublishSuccess) {
           setState(() {
             _isActionLoading = false;
           });
           _showSnackBar('¡Anuncio publicado! Buscando conductor...');
-          context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
-        } else if (state is LeaveBookingSuccess) {
+          // USAMOS EL BOOKING QUE VIENE EN EL ÉXITO (que tiene el PIN original preservado)
+          _loadActiveBookingDetails(state.booking);
+        } else if (state is LeaveBookingSuccess || state is CancelBookingSuccess) {
           setState(() {
             _isActionLoading = false;
           });
-          _showSnackBar('Saliste del grupo de viaje.');
-          context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
-        } else if (state is CancelBookingSuccess) {
-          setState(() {
-            _isActionLoading = false;
-          });
-          _showSnackBar('Grupo de viaje cancelado exitosamente.');
-          context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+          _clearActiveTripSession();
+          _showSnackBar(state is LeaveBookingSuccess 
+              ? 'Saliste del grupo de viaje.' 
+              : 'Grupo de viaje cancelado exitosamente.');
         } else if (state is ConfirmArrivalSuccess) {
           setState(() {
             _isActionLoading = false;
+            _locallyArrivedIds.add(currentUserId.toString());
           });
-          _showSnackBar('¡Llegada confirmada a salvo!');
-          context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+          _showSnackBar('¡Llegada confirmada! Esperando al conductor para finalizar.');
+          _checkActiveTrip();
         } else if (state is UpdatePaymentSuccess) {
           setState(() {
             _isActionLoading = false;
@@ -408,6 +520,7 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
               // 1. MAPA DE INTERACCIÓN REAL (FLUTTER MAP)
               Positioned.fill(
                 child: FlutterMap(
+                  mapController: _mapController,
                   options: MapOptions(
                     initialCenter: _routePoints.isNotEmpty
                         ? _routePoints.first
@@ -520,13 +633,7 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                               }).toList(),
                               onChanged: (newValue) {
                                 if (newValue != null) {
-                                  setState(() {
-                                    _selectedCampus = newValue;
-                                    final data = _campusData[newValue]!;
-                                    _mockLat = data['lat'];
-                                    _mockLng = data['lng'];
-                                    _mockAddress = data['address'];
-                                  });
+                                  _updateSelectedCampus(newValue);
                                 }
                               },
                             ),
@@ -701,7 +808,7 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                   Expanded(
                     child: ElevatedButton.icon(
                       onPressed: () async {
-                        await Navigator.pushNamed(
+                        final result = await Navigator.pushNamed(
                           context,
                           '/nearby-bookings',
                           arguments: {
@@ -710,6 +817,11 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                             'lng': _mockLng,
                           },
                         );
+                        
+                        if (result != null && result is String) {
+                          _updateSelectedCampus(result);
+                        }
+                        
                         // Al volver, refrescar el estado del dashboard
                         if (mounted) {
                           context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
@@ -732,8 +844,8 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                   const SizedBox(width: 12),
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: () {
-                        Navigator.pushNamed(
+                      onPressed: () async {
+                        final result = await Navigator.pushNamed(
                           context,
                           '/create-announcement',
                           arguments: {
@@ -742,6 +854,10 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                             'lng': _mockLng,
                           },
                         );
+
+                        if (result != null && result is String) {
+                          _updateSelectedCampus(result);
+                        }
                       },
                       style: OutlinedButton.styleFrom(
                         foregroundColor: AppColors.primary,
@@ -770,8 +886,7 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
   Widget _buildActiveBookingDashboard(int currentUserId) {
     final booking = _currentBooking!;
     final route = _currentRoute;
-    
-    // LÓGICA REFORZADA PARA DETERMINAR SI ERES EL LÍDER
+
     bool isLeader = booking.leaderId == currentUserId;
     if (!isLeader && booking.passengers.isNotEmpty) {
       try {
@@ -955,7 +1070,7 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                     ],
                   ),
                   Text(
-                    booking.securityPin!,
+                    _sessionPin ?? _currentTrip?['securityCode'] ?? booking.securityPin!,
                     style: const TextStyle(color: AppColors.primary, fontSize: 20, fontWeight: FontWeight.bold, letterSpacing: 2),
                   ),
                 ],
@@ -988,31 +1103,58 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                     }
                   }
                 }
+                // Detección de llegada del pasajero desde el objeto del viaje activo
+                bool pArrived = false;
+                if (_currentTrip != null && _currentTrip!['passengers'] != null) {
+                  final tPass = (_currentTrip!['passengers'] as List).firstWhere(
+                    (tp) => (tp['passengerId'] ?? tp['studentId'] ?? tp['id'] ?? '').toString() == p.studentId.toString(),
+                    orElse: () => null,
+                  );
+                  if (tPass != null) {
+                    final dynamic rawA = tPass['hasArrived'] ?? tPass['arrived'] ?? false;
+                    pArrived = rawA == true || rawA == 'true' || tPass['status'] == 'ARRIVED' || tPass['status'] == 'COMPLETED';
+                  }
+                }
+                
+                // Si el polling o el backend fallan, revisamos caché local para el usuario actual
+                if (!pArrived && isSelf) {
+                  pArrived = _locallyArrivedIds.contains(p.studentId.toString());
+                }
+
                 return Container(
                   margin: const EdgeInsets.only(bottom: 6),
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.02),
+                    color: pArrived ? Colors.green.withOpacity(0.05) : Colors.white.withOpacity(0.02),
                     borderRadius: BorderRadius.circular(8),
+                    border: pArrived ? Border.all(color: Colors.green.withOpacity(0.3)) : null,
                   ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Row(
                         children: [
-                          Icon(isL ? Icons.star : Icons.person, color: isL ? AppColors.primary : Colors.white70, size: 16),
+                          Icon(
+                            pArrived ? Icons.check_circle : (isL ? Icons.star : Icons.person), 
+                            color: pArrived ? Colors.green : (isL ? AppColors.primary : Colors.white70), 
+                            size: 16
+                          ),
                           const SizedBox(width: 8),
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
                                 'Estudiante #${p.studentId} ${isSelf ? "(Tú)" : ""}',
-                                style: TextStyle(color: isSelf ? AppColors.primary : Colors.white70, fontSize: 12, fontWeight: isSelf ? FontWeight.bold : FontWeight.normal),
+                                style: TextStyle(
+                                  color: pArrived ? Colors.greenAccent : (isSelf ? AppColors.primary : Colors.white70), 
+                                  fontSize: 12, 
+                                  fontWeight: isSelf || pArrived ? FontWeight.bold : FontWeight.normal
+                                ),
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                'Precio justo: S/ ${price.toStringAsFixed(2)} (${distance.toStringAsFixed(1)} km)',
-                                style: const TextStyle(color: Colors.grey, fontSize: 10),
+                                pArrived ? 'Llegó a salvo' : 'Precio justo: S/ ${price.toStringAsFixed(2)} (${distance.toStringAsFixed(1)} km)',
+                                style: TextStyle(color: pArrived ? Colors.green.withOpacity(0.7) : Colors.grey, fontSize: 10),
                               ),
                             ],
                           ),
@@ -1048,7 +1190,12 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
 
           const SizedBox(height: 16),
 
-          if (booking.status == 'OPEN' || booking.status == 'LOCKED' || booking.status == 'FULL') ...[
+          // PRIORIDAD 1: Si el viaje ya inició, mostrar confirmación de llegada
+          if (_currentTrip != null && (_currentTrip!['status'] == 'STARTED' || _currentTrip!['status'] == 'ACTIVE')) ...[
+            _buildConfirmArrivalButton(currentUserId, isLeader),
+          ] 
+          // PRIORIDAD 2: Si el grupo está en fases previas, mostrar controles de gestión
+          else if (booking.status == 'OPEN' || booking.status == 'LOCKED' || booking.status == 'FULL') ...[
             if (booking.status == 'OPEN' && isLeader) ...[
               ElevatedButton.icon(
                 onPressed: _isActionLoading ? null : () {
@@ -1056,7 +1203,7 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                     bookingId: booking.id,
                     routeId: booking.routeId,
                     campus: _selectedCampus,
-                    securityCode: booking.securityPin ?? '1234',
+                    securityCode: _sessionPin ?? booking.securityPin ?? '1234',
                     totalDistanceKm: _currentRoute?.totalDistanceKm ?? 5.0,
                     passengerIds: booking.passengers.map((p) => p.studentId).toList(),
                   ));
@@ -1087,17 +1234,25 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
               // BOTÓN PARA SEGUIDORES: Llama al Endpoint de Salir (/leave)
               OutlinedButton.icon(
                 onPressed: _isActionLoading ? null : () {
+                  // Obtener las coordenadas de la parada del usuario para enviarlas al backend
                   double lat = _mockLat;
                   double lng = _mockLng;
+                  bool waypointFound = false;
+
                   if (_currentRoute != null) {
                     for (var wp in _currentRoute!.waypoints) {
                       if (wp.passengerId == currentUserId) {
                         lat = wp.latitude;
                         lng = wp.longitude;
+                        waypointFound = true;
                         break;
                       }
                     }
                   }
+
+                  print('DEBUG: Intentando salir del grupo. UserID: $currentUserId, BookingId: ${booking.id}');
+                  print('DEBUG: Coordenadas enviadas: lat=$lat, lng=$lng. Parada encontrada: $waypointFound');
+
                   context.read<RoutesBloc>().add(LeaveBookingEvent(
                     bookingId: booking.id,
                     lat: lat,
@@ -1112,60 +1267,107 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                 icon: const Icon(Icons.exit_to_app),
                 label: const Text('Salir del Grupo', style: TextStyle(fontWeight: FontWeight.bold)),
               ),
-          ] else if (_currentTrip != null && _currentTrip!['status'] == 'ACTIVE') ...[
-            if (!isLeader)
-              _buildConfirmArrivalButton(currentUserId),
           ],
         ],
       ),
     );
   }
 
-  Widget _buildConfirmArrivalButton(int currentUserId) {
-    if (_currentTrip == null || _currentTrip!['passengers'] == null) return const SizedBox.shrink();
-    final passengersList = _currentTrip!['passengers'] as List;
-    final selfPass = passengersList.firstWhere(
-      (p) => p['passengerId'] == currentUserId,
-      orElse: () => null,
-    );
-    if (selfPass == null) return const SizedBox.shrink();
-    final bool arrived = selfPass['hasArrived'] ?? false;
+  Widget _buildConfirmArrivalButton(int currentUserId, bool isLeader) {
+    if (_currentTrip == null) return const SizedBox.shrink();
     
+    // Intentar obtener la lista de pasajeros del viaje o de la reserva
+    final List? tripPassengers = _currentTrip!['passengers'] as List?;
+    final bookingPassengers = _currentBooking?.passengers ?? [];
+
+    // 1. Determinar si YO ya llegué (Check local + Backend)
+    final String myIdStr = currentUserId.toString();
+    bool arrived = _locallyArrivedIds.contains(myIdStr);
+    
+    if (tripPassengers != null) {
+      for (var p in tripPassengers) {
+        final pId = (p['passengerId'] ?? p['studentId'] ?? p['id'] ?? p['student_id'] ?? '').toString();
+        if (pId == myIdStr) {
+          final dynamic rawArr = p['hasArrived'] ?? p['arrived'] ?? false;
+          if (rawArr == true || rawArr == 'true' || p['status'] == 'ARRIVED' || p['status'] == 'COMPLETED') {
+            arrived = true;
+            _locallyArrivedIds.add(myIdStr); // Sincronizamos caché local
+          }
+          break;
+        }
+      }
+    }
+
+    // ESTADO DESHABILITADO (Ya marcó pero espera al conductor)
     if (arrived) {
-      return Container(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: BoxDecoration(
-          color: Colors.green.withOpacity(0.15),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Colors.green),
-        ),
-        child: const Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.check_circle, color: Colors.green),
-            SizedBox(width: 8),
-            Text(
-              'Llegaste a salvo a casa',
-              style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold),
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ElevatedButton.icon(
+            onPressed: null, // DESHABILITADO
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.grey.shade800,
+              disabledBackgroundColor: Colors.grey.shade800,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: Colors.green, width: 1)),
             ),
-          ],
-        ),
-      );
-    } else {
-      return ElevatedButton.icon(
-        onPressed: _isActionLoading ? null : () {
-          context.read<RoutesBloc>().add(ConfirmArrivalEvent(
-            tripId: _currentTrip!['id'],
-            passengerId: currentUserId,
-          ));
-        },
-        style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.greenAccent,
-          padding: const EdgeInsets.symmetric(vertical: 14),
-        ),
-        icon: const Icon(Icons.home, color: Colors.black),
-        label: const Text('Confirmar Llegada a Salvo', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+            icon: const Icon(Icons.check_circle, color: Colors.green),
+            label: Text(
+              isLeader ? 'Viaje Finalizado (Esperando Conductor)' : 'Llegada Confirmada',
+              style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            isLeader 
+              ? 'Has notificado la llegada del grupo. El conductor debe cerrar el viaje.' 
+              : 'Has notificado tu llegada. El conductor cerrará el viaje al finalizar el recorrido.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
+          ),
+        ],
       );
     }
+
+    // ESTADO ACTIVO
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ElevatedButton.icon(
+          onPressed: _isActionLoading ? null : () async {
+            // Buscamos el ID específico que el backend usa para esta relación (pasajero-viaje)
+            dynamic finalPassengerId = currentUserId;
+            if (tripPassengers != null) {
+              final meInTrip = tripPassengers.firstWhere(
+                (p) => (p['passengerId'] ?? p['studentId'] ?? p['id'] ?? '').toString() == currentUserId.toString(),
+                orElse: () => null,
+              );
+              // Prioridad: 1. ID de la relación (PK), 2. passengerId, 3. studentId
+              if (meInTrip != null) {
+                finalPassengerId = meInTrip['id'] ?? meInTrip['passengerId'] ?? meInTrip['studentId'] ?? currentUserId;
+              }
+            }
+
+            print('DEBUG: Senior Audit - Enviando confirmación. Trip: ${_currentTrip!['id']}, PassengerID Detectado: $finalPassengerId');
+            
+            context.read<RoutesBloc>().add(ConfirmArrivalEvent(
+              tripId: _currentTrip!['id'],
+              passengerId: finalPassengerId is int ? finalPassengerId : int.tryParse(finalPassengerId.toString()) ?? currentUserId,
+            ));
+          },
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.greenAccent,
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+          icon: Icon(isLeader ? Icons.flag : Icons.home, color: Colors.black),
+          label: Text(
+            isLeader ? 'Finalizar Viaje del Grupo' : 'Confirmar mi Llegada',
+            style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+          ),
+        ),
+      ],
+    );
   }
 }
+
