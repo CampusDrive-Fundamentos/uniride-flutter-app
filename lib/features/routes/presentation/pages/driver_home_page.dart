@@ -334,13 +334,18 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
       }
 
       if (completeResp.statusCode == 200) {
-        _showSnackBar('¡Viaje finalizado con éxito!');
+        // Cálculo de montos para el resumen final
+        final distance = _activeRoute != null ? (_activeRoute!['totalDistanceKm'] as num).toDouble() : 5.0;
+        final totalAmount = _activeTrip!['totalAmount'] ?? _activeTrip!['price'] ?? _activeTrip!['totalPrice'] ?? (_activeBooking?['price'] ?? (10.0 + (distance * 1.5)));
+
         setState(() {
           _activeTrip = null;
           _activeRoute = null;
           _activeBooking = null;
           _routePoints.clear();
         });
+        
+        _showTripSummary(totalAmount);
         _loadAvailableTrips();
       }
     } catch (e) {
@@ -353,6 +358,71 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
         _isActionLoading = false;
       });
     }
+  }
+
+  void _showTripSummary(double totalAmount) {
+    final double commission = totalAmount * 0.10;
+    final double profit = totalAmount - commission;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: AppColors.primary.withOpacity(0.5))),
+        title: const Column(
+          children: [
+            Icon(Icons.check_circle_outline, color: Colors.greenAccent, size: 50),
+            SizedBox(height: 10),
+            Text('Resumen del Viaje', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildSummaryRow('Monto Total', 'S/ ${totalAmount.toStringAsFixed(2)}', isBold: true),
+            const Divider(color: Colors.white12),
+            _buildSummaryRow('Comisión (10%)', '- S/ ${commission.toStringAsFixed(2)}', color: Colors.redAccent),
+            const Divider(color: Colors.white12),
+            _buildSummaryRow('Tu Ganancia', 'S/ ${profit.toStringAsFixed(2)}', color: Colors.greenAccent, isLarge: true),
+          ],
+        ),
+        actions: [
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () => Navigator.pop(context),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: const Text('ACEPTAR', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryRow(String label, String value, {bool isBold = false, Color? color, bool isLarge = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+          Text(
+            value,
+            style: TextStyle(
+              color: color ?? Colors.white,
+              fontWeight: isBold || isLarge ? FontWeight.bold : FontWeight.normal,
+              fontSize: isLarge ? 18 : 14,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _cancelTrip() async {

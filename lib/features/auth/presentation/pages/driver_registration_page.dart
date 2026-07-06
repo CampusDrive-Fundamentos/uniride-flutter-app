@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../blocs/auth_bloc.dart';
@@ -72,17 +73,39 @@ class _DriverRegistrationPageState extends State<DriverRegistrationPage> {
                   const SizedBox(height: 16),
                   Row(
                     children: [
-                      Expanded(child: _buildTextField(_dniCtrl, 'DNI (8 dígitos)', false, isNumber: true)),
+                      Expanded(
+                        child: _buildTextField(
+                          _dniCtrl, 
+                          'DNI (8 dígitos)', 
+                          false, 
+                          isNumber: true,
+                          inputFormatters: [
+                            LengthLimitingTextInputFormatter(8),
+                            FilteringTextInputFormatter.digitsOnly,
+                          ],
+                        )
+                      ),
                       const SizedBox(width: 16),
                       Expanded(child: _buildTextField(_phoneCtrl, 'Teléfono', false, isNumber: true)),
                     ],
                   ),
                   const SizedBox(height: 16),
-                  _buildTextField(_licenseCtrl, 'N° Licencia de Conducir', false),
+                  _buildTextField(
+                    _licenseCtrl, 
+                    'N° Licencia de Conducir', 
+                    false,
+                    inputFormatters: [LengthLimitingTextInputFormatter(11)],
+                  ),
                   const SizedBox(height: 16),
                   _buildTextField(_culCtrl, 'Código CUL', false),
                   const SizedBox(height: 16),
-                  _buildTextField(_cardCtrl, 'N° de Tarjeta Bancaria', false, isNumber: true),
+                  _buildTextField(
+                    _cardCtrl, 
+                    'N° de Tarjeta Bancaria', 
+                    false, 
+                    isNumber: true,
+                    inputFormatters: [CardNumberFormatter()],
+                  ),
 
                   const SizedBox(height: 24),
                   const Text('Datos del Vehículo', style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold, fontSize: 18)),
@@ -95,10 +118,10 @@ class _DriverRegistrationPageState extends State<DriverRegistrationPage> {
                     _vPlateCtrl, 
                     'Placa (Ej: ABC-123)', 
                     false,
+                    inputFormatters: [PlateFormatter()],
                     validator: (v) {
                       if (v == null || v.isEmpty) return 'Requerido';
-                      final regex = RegExp(r'^[A-Za-z]{3}-?[A-Za-z0-9]{3}$');
-                      if (!regex.hasMatch(v)) return 'Formato sugerido: XXX-000';
+                      if (v.length < 7) return 'Formato: XXX-123';
                       return null;
                     }
                   ),
@@ -115,13 +138,16 @@ class _DriverRegistrationPageState extends State<DriverRegistrationPage> {
                       ),
                       onPressed: () {
                         if (_formKey.currentState!.validate()) {
+                          // Limpiamos el número de tarjeta (quitar guiones) antes de enviar al backend
+                          final cleanCard = _cardCtrl.text.replaceAll('-', '');
+                          
                           context.read<AuthBloc>().add(RegisterDriverEvent(
                             username: _emailCtrl.text.split('@')[0],
                             firstName: _nameCtrl.text, lastName: _lastNameCtrl.text,
                             email: _emailCtrl.text, password: _passwordCtrl.text,
                             phoneNumber: _phoneCtrl.text, dni: _dniCtrl.text,
                             licenseNumber: _licenseCtrl.text, culCertificate: _culCtrl.text,
-                            cardNumber: _cardCtrl.text,
+                            cardNumber: cleanCard,
                             vehicleType: _vTypeCtrl.text,
                             vehicleName: _vNameCtrl.text,
                             vehiclePlate: _vPlateCtrl.text,
@@ -139,13 +165,21 @@ class _DriverRegistrationPageState extends State<DriverRegistrationPage> {
     );
   }
 
-  Widget _buildTextField(TextEditingController controller, String label, bool obscure, {bool isNumber = false, String? Function(String?)? validator}) {
+  Widget _buildTextField(
+    TextEditingController controller, 
+    String label, 
+    bool obscure, {
+    bool isNumber = false, 
+    String? Function(String?)? validator,
+    List<TextInputFormatter>? inputFormatters,
+  }) {
     return TextFormField(
       controller: controller,
       obscureText: obscure,
       keyboardType: isNumber ? TextInputType.number : TextInputType.text,
+      inputFormatters: inputFormatters,
       style: const TextStyle(color: AppColors.textPrimary),
-      validator: validator ?? (v) => v!.isEmpty ? 'Requerido' : null,
+      validator: validator ?? (v) => (v == null || v.isEmpty) ? 'Requerido' : null,
       decoration: InputDecoration(
         labelText: label,
         labelStyle: const TextStyle(color: AppColors.textSecondary),
@@ -153,6 +187,57 @@ class _DriverRegistrationPageState extends State<DriverRegistrationPage> {
         fillColor: AppColors.surface,
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
       ),
+    );
+  }
+}
+
+// FORMATTER PARA TARJETA BANCARIA: XXXX-XXXX-XXXX-XXXX
+class CardNumberFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    var text = newValue.text.replaceAll('-', '');
+    if (text.length > 16) text = text.substring(0, 16);
+    
+    var buffer = StringBuffer();
+    for (int i = 0; i < text.length; i++) {
+      buffer.write(text[i]);
+      int nonZeroIndex = i + 1;
+      if (nonZeroIndex % 4 == 0 && nonZeroIndex != text.length) {
+        buffer.write('-');
+      }
+    }
+
+    var string = buffer.toString();
+    return newValue.copyWith(
+      text: string,
+      selection: TextSelection.collapsed(offset: string.length),
+    );
+  }
+}
+
+// FORMATTER PARA PLACA: XXX-123 (3 letras mayusc, guion, 3 digitos)
+class PlateFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    var text = newValue.text.replaceAll('-', '');
+    if (text.length > 6) text = text.substring(0, 6);
+    
+    var buffer = StringBuffer();
+    for (int i = 0; i < text.length; i++) {
+      if (i < 3) {
+        buffer.write(text[i].toUpperCase());
+      } else {
+        buffer.write(text[i]);
+      }
+      if (i == 2 && text.length > 3) {
+        buffer.write('-');
+      }
+    }
+
+    var string = buffer.toString();
+    return newValue.copyWith(
+      text: string,
+      selection: TextSelection.collapsed(offset: string.length),
     );
   }
 }
