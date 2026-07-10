@@ -29,8 +29,8 @@ class CreateRouteAndBookingEvent extends RoutesEvent {
   final double destinationLng;
   final double startLat;
   final double startLng;
-  final String exitGate; // Adicional según US07 (Puerta de salida)
-  final String departureTime; // Adicional según US07 (Hora de salida)
+  final String exitGate; 
+  final String departureTime; 
 
   const CreateRouteAndBookingEvent({
     required this.campus,
@@ -113,13 +113,15 @@ class LeaveBookingEvent extends RoutesEvent {
   List<Object?> get props => [bookingId, lat, lng];
 }
 
+// NUEVO: Se agregó tripId
 class CancelBookingEvent extends RoutesEvent {
   final int bookingId;
+  final int? tripId;
 
-  const CancelBookingEvent(this.bookingId);
+  const CancelBookingEvent({required this.bookingId, this.tripId});
 
   @override
-  List<Object?> get props => [bookingId];
+  List<Object?> get props => [bookingId, tripId];
 }
 
 class ConfirmArrivalEvent extends RoutesEvent {

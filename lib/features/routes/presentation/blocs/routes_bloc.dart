@@ -83,18 +83,22 @@ class RoutesBloc extends Bloc<RoutesEvent, RoutesState> {
       await lockResult.fold(
         (failure) async => emit(RoutesError(failure.message)),
         (lockedBooking) async {
+          // MANTENEMOS EL PIN ORIGINAL: El usuario desea que el PIN sea el mismo que se generó al inicio.
+          // Ignoramos el PIN que devuelve el servidor tras bloquear para evitar confusiones al taxista.
+          final pinSincronizado = event.securityCode;
+          
           double amount = 10.0 + (event.totalDistanceKm * 1.5);
           final tripResult = await repository.createTrip(
             bookingId: event.bookingId,
             routeId: event.routeId,
             campus: event.campus,
-            securityCode: event.securityCode,
+            securityCode: pinSincronizado,
             totalAmount: amount,
             passengerIds: event.passengerIds,
           );
           tripResult.fold(
             (failure) => emit(RoutesError(failure.message)),
-            (_) => emit(LockAndPublishSuccess(lockedBooking)),
+            (_) => emit(LockAndPublishSuccess(lockedBooking.copyWith(securityPin: pinSincronizado))),
           );
         },
       );
@@ -109,16 +113,32 @@ class RoutesBloc extends Bloc<RoutesEvent, RoutesState> {
       );
       result.fold(
         (failure) => emit(RoutesError(failure.message)),
-        (_) => emit(LeaveBookingSuccess()),
+        (_) {
+          emit(LeaveBookingSuccess());
+          emit(CurrentBookingEmpty());
+        },
       );
     });
 
     on<CancelBookingEvent>((event, emit) async {
       emit(RoutesLoading());
+
+      // NUEVO: Si hay un viaje asociado (anuncio ya publicado a taxistas), lo cancelamos primero
+      if (event.tripId != null) {
+        await repository.cancelTrip(
+          tripId: event.tripId!,
+          reason: 'Líder canceló el grupo desde la app',
+        );
+      }
+
+      // Luego borramos el Booking (lo cual borra también la Ruta en el backend)
       final result = await repository.cancelBooking(bookingId: event.bookingId);
       result.fold(
         (failure) => emit(RoutesError(failure.message)),
-        (_) => emit(CancelBookingSuccess()),
+        (_) {
+          emit(CancelBookingSuccess());
+          emit(CurrentBookingEmpty());
+        },
       );
     });
 

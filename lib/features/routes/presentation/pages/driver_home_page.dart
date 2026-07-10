@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'dart:math';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import '../../../../core/constants/app_colors.dart';
@@ -16,6 +18,8 @@ class DriverHomePage extends StatefulWidget {
 }
 
 class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProviderStateMixin {
+  final MapController _mapController = MapController();
+  final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
   String _selectedCampus = 'MONTERRICO';
   List<Map<String, dynamic>> _availableTrips = [];
   bool _isLoading = false;
@@ -55,6 +59,12 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
       'address': 'Av. La Marina 2810, San Miguel',
       'dbName': 'UPC_SAN_MIGUEL',
     },
+    'UNMSM': {
+      'lat': -12.0559,
+      'lng': -77.0817,
+      'address': 'Av. Universitaria / Av. Venezuela, Lima',
+      'dbName': 'UNMSM',
+    },
   };
 
   @override
@@ -64,8 +74,45 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
       vsync: this,
       duration: const Duration(seconds: 2),
     )..repeat();
+    
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _loadPersistedCampus();
+      _checkActiveTrip();
+    });
+  }
+
+  Future<void> _loadPersistedCampus() async {
+    try {
+      final savedCampus = await _secureStorage.read(key: 'driver_selected_campus');
+      if (savedCampus != null && _campusData.containsKey(savedCampus)) {
+        setState(() {
+          _selectedCampus = savedCampus;
+        });
+        _mapController.move(
+          LatLng(_campusData[savedCampus]!['lat'], _campusData[savedCampus]!['lng']),
+          14.0,
+        );
+      }
+    } catch (_) {}
+    // Cargar viajes después de intentar recuperar el campus
     _loadAvailableTrips();
-    _checkActiveTrip();
+  }
+
+  void _updateSelectedCampus(String newCampus) async {
+    if (_campusData.containsKey(newCampus)) {
+      setState(() {
+        _selectedCampus = newCampus;
+      });
+      _mapController.move(
+        LatLng(_campusData[newCampus]!['lat'], _campusData[newCampus]!['lng']),
+        14.0,
+      );
+      _loadAvailableTrips();
+      
+      try {
+        await _secureStorage.write(key: 'driver_selected_campus', value: newCampus);
+      } catch (_) {}
+    }
   }
 
   @override
@@ -80,10 +127,12 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
       final dio = di.sl<Dio>();
       final response = await dio.get('/api/v1/trips/current');
       if (response.statusCode == 200 && response.data != null) {
-        final trip = response.data;
-        if (trip is Map && trip['status'] != 'COMPLETED' && trip['status'] != 'CANCELLED') {
+        final dynamic rawData = response.data;
+        final trip = rawData is Map ? Map<String, dynamic>.from(rawData) : jsonDecode(rawData as String) as Map<String, dynamic>;
+        
+        if (trip['status'] != 'COMPLETED' && trip['status'] != 'CANCELLED') {
           setState(() {
-            _activeTrip = Map<String, dynamic>.from(trip);
+            _activeTrip = trip;
           });
           await _loadActiveTripDetails();
         }
@@ -152,6 +201,13 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
     try {
       final dio = di.sl<Dio>();
       
+      // REFRESCAR VIAJE: Para obtener estados de llegada actualizados
+      final tripResp = await dio.get('/api/v1/trips/current');
+      if (tripResp.statusCode == 200 && tripResp.data != null) {
+        final dynamic rawT = tripResp.data;
+        _activeTrip = rawT is Map ? Map<String, dynamic>.from(rawT) : jsonDecode(rawT as String) as Map<String, dynamic>;
+      }
+
       // Cargar Ruta
       final routeId = _activeTrip!['routeId'];
       final routeResp = await dio.get('/api/v1/routes/$routeId');
@@ -205,7 +261,8 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
   }
 
   Future<void> _startTrip() async {
-    if (_pinController.text.length < 4) {
+    final pin = _pinController.text.trim();
+    if (pin.length < 4) {
       _showSnackBar('Por favor ingresa el PIN de seguridad de 4 dígitos.');
       return;
     }
@@ -217,11 +274,19 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
     try {
       final dio = di.sl<Dio>();
       final tripId = _activeTrip!['id'];
+      
+      print('DEBUG: Intentando iniciar viaje $tripId con PIN: $pin');
+      
+      // Enviamos tanto securityCode como pin por compatibilidad con el backend
       final response = await dio.post(
         '/api/v1/trips/$tripId/start',
-        data: {'securityCode': _pinController.text},
+        data: {
+          'securityCode': pin,
+          'pin': pin,
+        },
       );
-      if (response.statusCode == 200) {
+      
+      if (response.statusCode == 200 || response.statusCode == 201) {
         setState(() {
           _activeTrip = Map<String, dynamic>.from(response.data);
           _pinController.clear();
@@ -229,11 +294,15 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
         _showSnackBar('¡Viaje Iniciado! Conduce con cuidado.');
       }
     } on DioException catch (e) {
+      print('DEBUG: Error al iniciar viaje. Status: ${e.response?.statusCode}');
+      print('DEBUG: Response data: ${e.response?.data}');
+      
       final msg = e.response?.data is Map 
           ? (e.response?.data['message'] ?? 'Código PIN incorrecto.') 
           : 'Código PIN incorrecto.';
       _showSnackBar(msg);
-    } catch (_) {
+    } catch (e) {
+      print('DEBUG: Error inesperado: $e');
       _showSnackBar('Error de conexión al iniciar viaje.');
     } finally {
       setState(() {
@@ -250,15 +319,33 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
     try {
       final dio = di.sl<Dio>();
       final tripId = _activeTrip!['id'];
-      final response = await dio.post('/api/v1/trips/$tripId/complete');
-      if (response.statusCode == 200) {
-        _showSnackBar('¡Viaje finalizado con éxito!');
+
+      final completeResp = await dio.post('/api/v1/trips/$tripId/complete');
+      
+      // FORZAR CIERRE DE RESERVA: Para que desaparezca de la vista de los estudiantes inmediatamente
+      try {
+        final bookingId = _activeTrip!['bookingId'];
+        if (bookingId != null) {
+          await dio.delete('/api/v1/bookings/$bookingId');
+          print('DEBUG: Reserva $bookingId eliminada forzosamente tras finalizar viaje.');
+        }
+      } catch (e) {
+        print('DEBUG: No se pudo eliminar la reserva (posiblemente ya borrada por el backend): $e');
+      }
+
+      if (completeResp.statusCode == 200) {
+        // Cálculo de montos para el resumen final
+        final distance = _activeRoute != null ? (_activeRoute!['totalDistanceKm'] as num).toDouble() : 5.0;
+        final totalAmount = _activeTrip!['totalAmount'] ?? _activeTrip!['price'] ?? _activeTrip!['totalPrice'] ?? (_activeBooking?['price'] ?? (10.0 + (distance * 1.5)));
+
         setState(() {
           _activeTrip = null;
           _activeRoute = null;
           _activeBooking = null;
           _routePoints.clear();
         });
+        
+        _showTripSummary(totalAmount);
         _loadAvailableTrips();
       }
     } catch (e) {
@@ -271,6 +358,71 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
         _isActionLoading = false;
       });
     }
+  }
+
+  void _showTripSummary(double totalAmount) {
+    final double commission = totalAmount * 0.10;
+    final double profit = totalAmount - commission;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: AppColors.primary.withOpacity(0.5))),
+        title: const Column(
+          children: [
+            Icon(Icons.check_circle_outline, color: Colors.greenAccent, size: 50),
+            SizedBox(height: 10),
+            Text('Resumen del Viaje', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildSummaryRow('Monto Total', 'S/ ${totalAmount.toStringAsFixed(2)}', isBold: true),
+            const Divider(color: Colors.white12),
+            _buildSummaryRow('Comisión (10%)', '- S/ ${commission.toStringAsFixed(2)}', color: Colors.redAccent),
+            const Divider(color: Colors.white12),
+            _buildSummaryRow('Tu Ganancia', 'S/ ${profit.toStringAsFixed(2)}', color: Colors.greenAccent, isLarge: true),
+          ],
+        ),
+        actions: [
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () => Navigator.pop(context),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: const Text('ACEPTAR', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryRow(String label, String value, {bool isBold = false, Color? color, bool isLarge = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+          Text(
+            value,
+            style: TextStyle(
+              color: color ?? Colors.white,
+              fontWeight: isBold || isLarge ? FontWeight.bold : FontWeight.normal,
+              fontSize: isLarge ? 18 : 14,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _cancelTrip() async {
@@ -322,6 +474,7 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
           // 1. MAPA DE INTERACCIÓN REAL (FLUTTER MAP)
           Positioned.fill(
             child: FlutterMap(
+              mapController: _mapController,
               options: MapOptions(
                 initialCenter: _routePoints.isNotEmpty
                     ? _routePoints.first
@@ -471,10 +624,7 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
                       }).toList(),
                       onChanged: (value) {
                         if (value != null) {
-                          setState(() {
-                            _selectedCampus = value;
-                          });
-                          _loadAvailableTrips();
+                          _updateSelectedCampus(value);
                         }
                       },
                     )
@@ -570,7 +720,7 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
                   final route = trip['route'];
                   final destAddress = route != null ? route['destination']['address'] : 'Destino desconocido';
                   final distance = route != null ? (route['totalDistanceKm'] as num).toDouble() : 0.0;
-                  final amount = trip['totalAmount'] ?? (10.0 + distance * 1.5);
+                  final amount = trip['totalAmount'] ?? trip['price'] ?? trip['totalPrice'] ?? (10.0 + distance * 1.5);
 
                   return Container(
                     margin: const EdgeInsets.only(bottom: 10),
@@ -629,7 +779,10 @@ class _DriverHomePageState extends State<DriverHomePage> with SingleTickerProvid
     final route = _activeRoute;
     final booking = _activeBooking;
     final destAddress = route != null ? route['destination']['address'] : 'Cargando destino...';
-    final amount = _activeTrip!['totalAmount'] ?? 15.0;
+    
+    // MEJORADO: Cálculo dinámico si el backend no envía totalAmount, usando la misma fórmula que el estudiante
+    final distance = route != null ? (route['totalDistanceKm'] as num).toDouble() : 5.0;
+    final amount = _activeTrip!['totalAmount'] ?? _activeTrip!['price'] ?? _activeTrip!['totalPrice'] ?? (booking?['price'] ?? (10.0 + (distance * 1.5)));
     
     final passengerCount = booking != null && booking['passengers'] != null 
         ? (booking['passengers'] as List).length 

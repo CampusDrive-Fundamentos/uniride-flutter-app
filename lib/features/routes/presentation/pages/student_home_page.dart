@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:dio/dio.dart';
@@ -15,6 +17,7 @@ import '../blocs/routes_event.dart';
 import '../blocs/routes_state.dart';
 import '../../domain/entities/booking_entity.dart';
 import '../../domain/entities/route_entity.dart';
+import '../../domain/entities/passenger_entity.dart';
 
 class StudentHomePage extends StatefulWidget {
   const StudentHomePage({super.key});
@@ -24,6 +27,8 @@ class StudentHomePage extends StatefulWidget {
 }
 
 class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProviderStateMixin {
+  final MapController _mapController = MapController();
+  final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
   String _selectedCampus = 'MONTERRICO';
   late AnimationController _pulseController;
   
@@ -39,8 +44,11 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
   List<LatLng> _routePoints = [];
   bool _isActionLoading = false;
   int? _cachedUserId;
+  String? _sessionPin; // Cache para mantener el PIN original durante la sesión
+  Timer? _tripPollingTimer; // Polling para detectar llegadas de otros pasajeros
+  final Set<String> _locallyArrivedIds = {}; // IDs que han marcado llegada localmente para feedback instantáneo
 
-  // Opciones de campus de la UPC con sus coordenadas reales aproximadas
+  // Opciones de campus con sus coordenadas reales aproximadas
   final Map<String, Map<String, dynamic>> _campusData = {
     'MONTERRICO': {
       'lat': -12.1042,
@@ -62,6 +70,11 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
       'lng': -77.0937,
       'address': 'Av. La Marina 2810, San Miguel',
     },
+    'UNMSM': {
+      'lat': -12.0559,
+      'lng': -77.0817,
+      'address': 'Av. Universitaria / Av. Venezuela, Lima',
+    },
   };
 
   @override
@@ -72,15 +85,58 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
       duration: const Duration(seconds: 2),
     )..repeat();
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _loadPersistedCampus();
+      if (mounted) {
+        context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+      }
     });
+  }
+
+  Future<void> _loadPersistedCampus() async {
+    try {
+      final savedCampus = await _secureStorage.read(key: 'selected_campus');
+      if (savedCampus != null && _campusData.containsKey(savedCampus)) {
+        _updateSelectedCampus(savedCampus, persist: false);
+      }
+    } catch (_) {}
   }
 
   @override
   void dispose() {
     _pulseController.dispose();
+    _stopTripPolling();
     super.dispose();
+  }
+
+  void _startTripPolling() {
+    _tripPollingTimer?.cancel();
+    _tripPollingTimer = Timer.periodic(const Duration(seconds: 4), (timer) {
+      if (mounted && _currentBooking != null) {
+        // Refrescamos tanto el viaje como la reserva principal para detectar el cierre del conductor
+        _checkActiveTrip();
+        context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+      } else {
+        _stopTripPolling();
+      }
+    });
+  }
+
+  void _stopTripPolling() {
+    _tripPollingTimer?.cancel();
+    _tripPollingTimer = null;
+  }
+
+  void _clearActiveTripSession() {
+    _stopTripPolling();
+    setState(() {
+      _currentTrip = null;
+      _currentBooking = null;
+      _currentRoute = null;
+      _routePoints = [];
+      _sessionPin = null;
+      _locallyArrivedIds.clear();
+    });
   }
 
   Future<void> _loadRouteDetails(int routeId) async {
@@ -110,22 +166,61 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
       final dio = di.sl<Dio>();
       final response = await dio.get('/api/v1/trips/current');
       if (response.statusCode == 200 && response.data != null) {
+        final dynamic rawData = response.data;
+        Map<String, dynamic> tripData = rawData is Map ? Map<String, dynamic>.from(rawData) : jsonDecode(rawData as String) as Map<String, dynamic>;
+        
+        // Sincronización agresiva: El líder necesita el detalle completo para ver llegadas
+        if (tripData['id'] != null) {
+          try {
+            final detailResp = await dio.get('/api/v1/trips/${tripData['id']}');
+            if (detailResp.statusCode == 200 && detailResp.data != null) {
+              final dynamic detailRaw = detailResp.data;
+              final fullDetail = detailRaw is Map ? Map<String, dynamic>.from(detailRaw) : jsonDecode(detailRaw as String) as Map<String, dynamic>;
+              tripData = fullDetail;
+            }
+          } catch (_) {}
+        }
+
         setState(() {
-          _currentTrip = Map<String, dynamic>.from(response.data);
+          _currentTrip = tripData;
         });
+        
+        // Si el viaje terminó, limpiamos todo para volver a la pantalla de búsqueda
+        if (_currentTrip!['status'] == 'COMPLETED' || _currentTrip!['status'] == 'CANCELLED') {
+          _clearActiveTripSession();
+          _showSnackBar('El viaje ha finalizado. ¡Gracias por usar Uniride!');
+        } else {
+          // Si el viaje está en cualquier otro estado activo (ACCEPTED, STARTED, ACTIVE, etc.)
+          // nos aseguramos de que el polling esté funcionando para detectar el fin.
+          if (_tripPollingTimer == null) _startTripPolling();
+        }
       } else {
-        setState(() {
-          _currentTrip = null;
-        });
+        // Si no hay viaje actual en el endpoint, pero teníamos uno activo, 
+        // significa que el conductor lo terminó o se canceló.
+        if (_currentTrip != null) {
+          _clearActiveTripSession();
+          _showSnackBar('El viaje ha finalizado.');
+        }
       }
     } catch (_) {
-      setState(() {
-        _currentTrip = null;
-      });
+      // En caso de error (ej. 404), si teníamos un viaje, asumimos que terminó
+      if (_currentTrip != null) {
+        _clearActiveTripSession();
+      }
     }
   }
 
   Future<void> _loadActiveBookingDetails(BookingEntity booking) async {
+    // CACHÉ DE PIN: Si el ID del booking es el mismo, mantenemos el primer PIN que vimos
+    // para evitar que los cambios del backend al cerrar el grupo confundan al usuario.
+    if (_currentBooking?.id == booking.id) {
+      if (_sessionPin == null && booking.securityPin != null) {
+        _sessionPin = booking.securityPin;
+      }
+    } else {
+      _sessionPin = booking.securityPin;
+    }
+
     setState(() {
       _currentBooking = booking;
     });
@@ -256,6 +351,81 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
     return markers;
   }
 
+  Map<int, double> _calculateFairPrices(BookingEntity booking) {
+    final Map<int, double> prices = {};
+    final route = _currentRoute;
+    if (route == null || booking.passengers.isEmpty) return prices;
+
+    final int totalStudents = booking.passengers.length;
+    final double baseShare = 10.0 / totalStudents;
+
+    // 1. Obtener la distancia de cada pasajero
+    final List<MapEntry<PassengerEntity, double>> passengersWithDistance = [];
+    for (var p in booking.passengers) {
+      double dist = 0.0;
+      if (p.role.toUpperCase() == 'LEADER') {
+        dist = route.totalDistanceKm;
+      } else {
+        for (var wp in route.waypoints) {
+          if (wp.passengerId == p.studentId) {
+            dist = wp.distanceFromStartKm ?? 0.0;
+            break;
+          }
+        }
+      }
+      passengersWithDistance.add(MapEntry(p, dist));
+    }
+
+    // 2. Ordenar por distancia ascendente
+    passengersWithDistance.sort((a, b) => a.value.compareTo(b.value));
+
+    // Inicializar precios con el costo base
+    for (var p in booking.passengers) {
+      prices[p.studentId] = baseShare;
+    }
+
+    // 3. Calcular costo por segmentos
+    double prevDistance = 0.0;
+    for (int i = 0; i < passengersWithDistance.length; i++) {
+      final double currentDistance = passengersWithDistance[i].value;
+      final double segmentLength = currentDistance - prevDistance;
+      
+      if (segmentLength > 0.001) {
+        final int passengersInSegment = passengersWithDistance.length - i;
+        final double segmentCost = segmentLength * 1.5;
+        final double sharePerPassenger = segmentCost / passengersInSegment;
+
+        for (int j = i; j < passengersWithDistance.length; j++) {
+          final int studentId = passengersWithDistance[j].key.studentId;
+          prices[studentId] = (prices[studentId] ?? 0.0) + sharePerPassenger;
+        }
+      }
+      prevDistance = currentDistance;
+    }
+
+    return prices;
+  }
+
+  void _updateSelectedCampus(String newCampus, {bool persist = true}) async {
+    if (_campusData.containsKey(newCampus)) {
+      final data = _campusData[newCampus]!;
+      setState(() {
+        _selectedCampus = newCampus;
+        _mockLat = data['lat'];
+        _mockLng = data['lng'];
+        _mockAddress = data['address'];
+      });
+      _mapController.move(
+        LatLng(data['lat'], data['lng']),
+        14.0,
+      );
+
+      if (persist) {
+        await _secureStorage.write(key: 'selected_campus', value: newCampus);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final profileState = context.watch<ProfileBloc>().state;
@@ -293,41 +463,44 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
             _currentRoute = null;
             _currentTrip = null;
             _routePoints = [];
+            _sessionPin = null;
+            _locallyArrivedIds.clear();
           });
         } else if (state is RouteAndBookingCreated) {
           setState(() {
             _isActionLoading = false;
+            _locallyArrivedIds.clear();
           });
-          context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+          // Cargamos los detalles directamente desde la entidad creada para evitar saltos de PIN
+          _loadActiveBookingDetails(state.booking);
         } else if (state is JoinedBookingSuccess) {
           setState(() {
             _isActionLoading = false;
+            _locallyArrivedIds.clear();
           });
-          context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+          _loadActiveBookingDetails(state.booking);
         } else if (state is LockAndPublishSuccess) {
           setState(() {
             _isActionLoading = false;
           });
           _showSnackBar('¡Anuncio publicado! Buscando conductor...');
-          context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
-        } else if (state is LeaveBookingSuccess) {
+          // USAMOS EL BOOKING QUE VIENE EN EL ÉXITO (que tiene el PIN original preservado)
+          _loadActiveBookingDetails(state.booking);
+        } else if (state is LeaveBookingSuccess || state is CancelBookingSuccess) {
           setState(() {
             _isActionLoading = false;
           });
-          _showSnackBar('Saliste del grupo de viaje.');
-          context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
-        } else if (state is CancelBookingSuccess) {
-          setState(() {
-            _isActionLoading = false;
-          });
-          _showSnackBar('Grupo de viaje cancelado.');
-          context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+          _clearActiveTripSession();
+          _showSnackBar(state is LeaveBookingSuccess 
+              ? 'Saliste del grupo de viaje.' 
+              : 'Grupo de viaje cancelado exitosamente.');
         } else if (state is ConfirmArrivalSuccess) {
           setState(() {
             _isActionLoading = false;
+            _locallyArrivedIds.add(currentUserId.toString());
           });
-          _showSnackBar('¡Llegada confirmada a salvo!');
-          context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
+          _showSnackBar('¡Llegada confirmada! Esperando al conductor para finalizar.');
+          _checkActiveTrip();
         } else if (state is UpdatePaymentSuccess) {
           setState(() {
             _isActionLoading = false;
@@ -347,6 +520,7 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
               // 1. MAPA DE INTERACCIÓN REAL (FLUTTER MAP)
               Positioned.fill(
                 child: FlutterMap(
+                  mapController: _mapController,
                   options: MapOptions(
                     initialCenter: _routePoints.isNotEmpty
                         ? _routePoints.first
@@ -459,13 +633,7 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                               }).toList(),
                               onChanged: (newValue) {
                                 if (newValue != null) {
-                                  setState(() {
-                                    _selectedCampus = newValue;
-                                    final data = _campusData[newValue]!;
-                                    _mockLat = data['lat'];
-                                    _mockLng = data['lng'];
-                                    _mockAddress = data['address'];
-                                  });
+                                  _updateSelectedCampus(newValue);
                                 }
                               },
                             ),
@@ -640,7 +808,7 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                   Expanded(
                     child: ElevatedButton.icon(
                       onPressed: () async {
-                        await Navigator.pushNamed(
+                        final result = await Navigator.pushNamed(
                           context,
                           '/nearby-bookings',
                           arguments: {
@@ -649,6 +817,11 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                             'lng': _mockLng,
                           },
                         );
+                        
+                        if (result != null && result is String) {
+                          _updateSelectedCampus(result);
+                        }
+                        
                         // Al volver, refrescar el estado del dashboard
                         if (mounted) {
                           context.read<RoutesBloc>().add(const LoadCurrentBookingEvent());
@@ -671,8 +844,8 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                   const SizedBox(width: 12),
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: () {
-                        Navigator.pushNamed(
+                      onPressed: () async {
+                        final result = await Navigator.pushNamed(
                           context,
                           '/create-announcement',
                           arguments: {
@@ -681,6 +854,10 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                             'lng': _mockLng,
                           },
                         );
+
+                        if (result != null && result is String) {
+                          _updateSelectedCampus(result);
+                        }
                       },
                       style: OutlinedButton.styleFrom(
                         foregroundColor: AppColors.primary,
@@ -708,7 +885,20 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
 
   Widget _buildActiveBookingDashboard(int currentUserId) {
     final booking = _currentBooking!;
-    final isLeader = booking.leaderId == currentUserId;
+    final route = _currentRoute;
+
+    bool isLeader = booking.leaderId == currentUserId;
+    if (!isLeader && booking.passengers.isNotEmpty) {
+      try {
+        final me = booking.passengers.firstWhere((p) => p.studentId == currentUserId);
+        isLeader = (me.role.toUpperCase() == 'LEADER');
+      } catch (e) {
+        // Fallback: Si acabas de crear el viaje, eres el único pasajero, asume que eres el líder
+        if (booking.passengers.length == 1 && booking.passengers.first.role.toUpperCase() == 'LEADER') {
+          isLeader = true;
+        }
+      }
+    }
     
     String statusText = 'Grupo Abierto';
     Color statusColor = Colors.greenAccent;
@@ -787,14 +977,14 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
           ),
           const Divider(color: Colors.white12, height: 20),
 
-          if (_currentRoute != null) ...[
+          if (route != null) ...[
             Row(
               children: [
                 const Icon(Icons.location_on, color: AppColors.primary, size: 16),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    _currentRoute!.destination.address,
+                    route.destination.address,
                     style: const TextStyle(color: Colors.white, fontSize: 13),
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -807,16 +997,54 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                 const Icon(Icons.straighten, color: AppColors.primary, size: 16),
                 const SizedBox(width: 8),
                 Text(
-                  'Distancia: ${_currentRoute!.totalDistanceKm.toStringAsFixed(1)} km',
+                  'Distancia total: ${route.totalDistanceKm.toStringAsFixed(1)} km',
                   style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
                 ),
                 const SizedBox(width: 12),
                 const Icon(Icons.payments_outlined, color: AppColors.primary, size: 16),
                 const SizedBox(width: 4),
                 Text(
-                  'Costo total: S/ ${(10.0 + _currentRoute!.totalDistanceKm * 1.5).toStringAsFixed(2)}',
+                  'Costo total: S/ ${(10.0 + route.totalDistanceKm * 1.5).toStringAsFixed(2)}',
                   style: const TextStyle(color: AppColors.primary, fontSize: 12, fontWeight: FontWeight.bold),
                 ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                const Icon(Icons.account_balance_wallet_outlined, color: Colors.greenAccent, size: 16),
+                const SizedBox(width: 8),
+                 Builder(builder: (context) {
+                  if (booking.passengers.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
+                  PassengerEntity? me;
+                  for (var p in booking.passengers) {
+                    if (p.studentId == currentUserId) {
+                      me = p;
+                      break;
+                    }
+                  }
+                  me ??= booking.passengers.first;
+
+                  final prices = _calculateFairPrices(booking);
+                  final double price = prices[me.studentId] ?? 0.0;
+                  double distance = me.role.toUpperCase() == 'LEADER'
+                      ? route.totalDistanceKm
+                      : 0.0;
+                  if (me.role.toUpperCase() != 'LEADER') {
+                    for (var wp in route.waypoints) {
+                      if (wp.passengerId == currentUserId) {
+                        distance = wp.distanceFromStartKm ?? 0.0;
+                        break;
+                      }
+                    }
+                  }
+                  return Text(
+                    'Tu precio justo: S/ ${price.toStringAsFixed(2)} (${distance.toStringAsFixed(1)} km recorridos)',
+                    style: const TextStyle(color: Colors.greenAccent, fontSize: 12, fontWeight: FontWeight.bold),
+                  );
+                }),
               ],
             ),
             const SizedBox(height: 12),
@@ -842,7 +1070,7 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                     ],
                   ),
                   Text(
-                    booking.securityPin!,
+                    _sessionPin ?? _currentTrip?['securityCode'] ?? booking.securityPin!,
                     style: const TextStyle(color: AppColors.primary, fontSize: 20, fontWeight: FontWeight.bold, letterSpacing: 2),
                   ),
                 ],
@@ -853,58 +1081,121 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
 
           const Text('Pasajeros en el Grupo:', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
           const SizedBox(height: 6),
-          ...booking.passengers.map((p) {
-            final isSelf = p.studentId == currentUserId;
-            final isL = p.role.toUpperCase() == 'LEADER';
-            return Container(
-              margin: const EdgeInsets.only(bottom: 6),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.02),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(
+          Builder(builder: (context) {
+            final r = route;
+            if (r == null) {
+              return const SizedBox.shrink();
+            }
+            final prices = _calculateFairPrices(booking);
+            return Column(
+              children: booking.passengers.map((p) {
+                final isSelf = p.studentId == currentUserId || (isLeader && p.role.toUpperCase() == 'LEADER');
+                final isL = p.role.toUpperCase() == 'LEADER';
+                final double price = prices[p.studentId] ?? 0.0;
+                double distance = isL
+                    ? r.totalDistanceKm
+                    : 0.0;
+                if (!isL) {
+                  for (var wp in r.waypoints) {
+                    if (wp.passengerId == p.studentId) {
+                      distance = wp.distanceFromStartKm ?? 0.0;
+                      break;
+                    }
+                  }
+                }
+                // Detección de llegada del pasajero desde el objeto del viaje activo
+                bool pArrived = false;
+                if (_currentTrip != null && _currentTrip!['passengers'] != null) {
+                  final tPass = (_currentTrip!['passengers'] as List).firstWhere(
+                    (tp) => (tp['passengerId'] ?? tp['studentId'] ?? tp['id'] ?? '').toString() == p.studentId.toString(),
+                    orElse: () => null,
+                  );
+                  if (tPass != null) {
+                    final dynamic rawA = tPass['hasArrived'] ?? tPass['arrived'] ?? false;
+                    pArrived = rawA == true || rawA == 'true' || tPass['status'] == 'ARRIVED' || tPass['status'] == 'COMPLETED';
+                  }
+                }
+                
+                // Si el polling o el backend fallan, revisamos caché local para el usuario actual
+                if (!pArrived && isSelf) {
+                  pArrived = _locallyArrivedIds.contains(p.studentId.toString());
+                }
+
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: pArrived ? Colors.green.withOpacity(0.05) : Colors.white.withOpacity(0.02),
+                    borderRadius: BorderRadius.circular(8),
+                    border: pArrived ? Border.all(color: Colors.green.withOpacity(0.3)) : null,
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Icon(isL ? Icons.star : Icons.person, color: isL ? AppColors.primary : Colors.white70, size: 16),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Estudiante #${p.studentId} ${isSelf ? "(Tú)" : ""}',
-                        style: TextStyle(color: isSelf ? AppColors.primary : Colors.white70, fontSize: 12, fontWeight: isSelf ? FontWeight.bold : FontWeight.normal),
+                      Row(
+                        children: [
+                          Icon(
+                            pArrived ? Icons.check_circle : (isL ? Icons.star : Icons.person), 
+                            color: pArrived ? Colors.green : (isL ? AppColors.primary : Colors.white70), 
+                            size: 16
+                          ),
+                          const SizedBox(width: 8),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Estudiante #${p.studentId} ${isSelf ? "(Tú)" : ""}',
+                                style: TextStyle(
+                                  color: pArrived ? Colors.greenAccent : (isSelf ? AppColors.primary : Colors.white70), 
+                                  fontSize: 12, 
+                                  fontWeight: isSelf || pArrived ? FontWeight.bold : FontWeight.normal
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                pArrived ? 'Llegó a salvo' : 'Precio justo: S/ ${price.toStringAsFixed(2)} (${distance.toStringAsFixed(1)} km)',
+                                style: TextStyle(color: pArrived ? Colors.green.withOpacity(0.7) : Colors.grey, fontSize: 10),
+                              ),
+                            ],
+                          ),
+                        ],
                       ),
+                      if (isLeader && !isSelf && _currentTrip != null) 
+                        GestureDetector(
+                          onTap: () => _showPaymentMethodSelector(booking.id, p.studentId),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: p.paymentStatus == 'PAID' ? Colors.green.withOpacity(0.2) : Colors.orangeAccent.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(color: p.paymentStatus == 'PAID' ? Colors.green : Colors.orangeAccent),
+                            ),
+                            child: Text(
+                              p.paymentStatus == 'PAID' ? 'PAGADO (${p.paymentMethod})' : 'MARCAR PAGO',
+                              style: TextStyle(color: p.paymentStatus == 'PAID' ? Colors.green : Colors.orangeAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        )
+                      else
+                        Text(
+                          p.paymentStatus == 'PAID' ? '✓ Pagado' : 'Pendiente',
+                          style: TextStyle(color: p.paymentStatus == 'PAID' ? Colors.green : Colors.orangeAccent, fontSize: 11),
+                        )
                     ],
                   ),
-                  if (isLeader && !isSelf && _currentTrip != null) 
-                    GestureDetector(
-                      onTap: () => _showPaymentMethodSelector(booking.id, p.studentId),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: p.paymentStatus == 'PAID' ? Colors.green.withOpacity(0.2) : Colors.orangeAccent.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(4),
-                          border: Border.all(color: p.paymentStatus == 'PAID' ? Colors.green : Colors.orangeAccent),
-                        ),
-                        child: Text(
-                          p.paymentStatus == 'PAID' ? 'PAGADO (${p.paymentMethod})' : 'MARCAR PAGO',
-                          style: TextStyle(color: p.paymentStatus == 'PAID' ? Colors.green : Colors.orangeAccent, fontSize: 10, fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                    )
-                  else
-                    Text(
-                      p.paymentStatus == 'PAID' ? '✓ Pagado' : 'Pendiente',
-                      style: TextStyle(color: p.paymentStatus == 'PAID' ? Colors.green : Colors.orangeAccent, fontSize: 11),
-                    )
-                ],
-              ),
+                );
+              }).toList(),
             );
           }),
 
           const SizedBox(height: 16),
 
-          if (booking.status == 'OPEN' || booking.status == 'LOCKED' || booking.status == 'FULL') ...[
+          // PRIORIDAD 1: Si el viaje ya inició, mostrar confirmación de llegada
+          if (_currentTrip != null && (_currentTrip!['status'] == 'STARTED' || _currentTrip!['status'] == 'ACTIVE')) ...[
+            _buildConfirmArrivalButton(currentUserId, isLeader),
+          ] 
+          // PRIORIDAD 2: Si el grupo está en fases previas, mostrar controles de gestión
+          else if (booking.status == 'OPEN' || booking.status == 'LOCKED' || booking.status == 'FULL') ...[
             if (booking.status == 'OPEN' && isLeader) ...[
               ElevatedButton.icon(
                 onPressed: _isActionLoading ? null : () {
@@ -912,7 +1203,7 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                     bookingId: booking.id,
                     routeId: booking.routeId,
                     campus: _selectedCampus,
-                    securityCode: booking.securityPin ?? '1234',
+                    securityCode: _sessionPin ?? booking.securityPin ?? '1234',
                     totalDistanceKm: _currentRoute?.totalDistanceKm ?? 5.0,
                     passengerIds: booking.passengers.map((p) => p.studentId).toList(),
                   ));
@@ -923,9 +1214,13 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
               const SizedBox(height: 8),
             ],
             if (isLeader)
+              // BOTÓN CORRECTO PARA EL LÍDER: LLama al Endpoint de Cancelar (/api/v1/bookings/{id})
               OutlinedButton.icon(
                 onPressed: _isActionLoading ? null : () {
-                  context.read<RoutesBloc>().add(CancelBookingEvent(booking.id));
+                  context.read<RoutesBloc>().add(CancelBookingEvent(
+                    bookingId: booking.id,
+                    tripId: _currentTrip != null ? _currentTrip!['id'] : null,
+                  ));
                 },
                 style: OutlinedButton.styleFrom(
                   foregroundColor: Colors.redAccent,
@@ -936,12 +1231,32 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                 label: const Text('Cancelar Grupo', style: TextStyle(fontWeight: FontWeight.bold)),
               )
             else
+              // BOTÓN PARA SEGUIDORES: Llama al Endpoint de Salir (/leave)
               OutlinedButton.icon(
                 onPressed: _isActionLoading ? null : () {
+                  // Obtener las coordenadas de la parada del usuario para enviarlas al backend
+                  double lat = _mockLat;
+                  double lng = _mockLng;
+                  bool waypointFound = false;
+
+                  if (_currentRoute != null) {
+                    for (var wp in _currentRoute!.waypoints) {
+                      if (wp.passengerId == currentUserId) {
+                        lat = wp.latitude;
+                        lng = wp.longitude;
+                        waypointFound = true;
+                        break;
+                      }
+                    }
+                  }
+
+                  print('DEBUG: Intentando salir del grupo. UserID: $currentUserId, BookingId: ${booking.id}');
+                  print('DEBUG: Coordenadas enviadas: lat=$lat, lng=$lng. Parada encontrada: $waypointFound');
+
                   context.read<RoutesBloc>().add(LeaveBookingEvent(
                     bookingId: booking.id,
-                    lat: _mockLat,
-                    lng: _mockLng,
+                    lat: lat,
+                    lng: lng,
                   ));
                 },
                 style: OutlinedButton.styleFrom(
@@ -952,60 +1267,107 @@ class _StudentHomePageState extends State<StudentHomePage> with SingleTickerProv
                 icon: const Icon(Icons.exit_to_app),
                 label: const Text('Salir del Grupo', style: TextStyle(fontWeight: FontWeight.bold)),
               ),
-          ] else if (_currentTrip != null && _currentTrip!['status'] == 'ACTIVE') ...[
-            if (!isLeader)
-              _buildConfirmArrivalButton(currentUserId),
           ],
         ],
       ),
     );
   }
 
-  Widget _buildConfirmArrivalButton(int currentUserId) {
-    if (_currentTrip == null || _currentTrip!['passengers'] == null) return const SizedBox.shrink();
-    final passengersList = _currentTrip!['passengers'] as List;
-    final selfPass = passengersList.firstWhere(
-      (p) => p['passengerId'] == currentUserId,
-      orElse: () => null,
-    );
-    if (selfPass == null) return const SizedBox.shrink();
-    final bool arrived = selfPass['hasArrived'] ?? false;
+  Widget _buildConfirmArrivalButton(int currentUserId, bool isLeader) {
+    if (_currentTrip == null) return const SizedBox.shrink();
     
+    // Intentar obtener la lista de pasajeros del viaje o de la reserva
+    final List? tripPassengers = _currentTrip!['passengers'] as List?;
+    final bookingPassengers = _currentBooking?.passengers ?? [];
+
+    // 1. Determinar si YO ya llegué (Check local + Backend)
+    final String myIdStr = currentUserId.toString();
+    bool arrived = _locallyArrivedIds.contains(myIdStr);
+    
+    if (tripPassengers != null) {
+      for (var p in tripPassengers) {
+        final pId = (p['passengerId'] ?? p['studentId'] ?? p['id'] ?? p['student_id'] ?? '').toString();
+        if (pId == myIdStr) {
+          final dynamic rawArr = p['hasArrived'] ?? p['arrived'] ?? false;
+          if (rawArr == true || rawArr == 'true' || p['status'] == 'ARRIVED' || p['status'] == 'COMPLETED') {
+            arrived = true;
+            _locallyArrivedIds.add(myIdStr); // Sincronizamos caché local
+          }
+          break;
+        }
+      }
+    }
+
+    // ESTADO DESHABILITADO (Ya marcó pero espera al conductor)
     if (arrived) {
-      return Container(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: BoxDecoration(
-          color: Colors.green.withOpacity(0.15),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Colors.green),
-        ),
-        child: const Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.check_circle, color: Colors.green),
-            SizedBox(width: 8),
-            Text(
-              'Llegaste a salvo a casa',
-              style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold),
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ElevatedButton.icon(
+            onPressed: null, // DESHABILITADO
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.grey.shade800,
+              disabledBackgroundColor: Colors.grey.shade800,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: Colors.green, width: 1)),
             ),
-          ],
-        ),
-      );
-    } else {
-      return ElevatedButton.icon(
-        onPressed: _isActionLoading ? null : () {
-          context.read<RoutesBloc>().add(ConfirmArrivalEvent(
-            tripId: _currentTrip!['id'],
-            passengerId: currentUserId,
-          ));
-        },
-        style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.greenAccent,
-          padding: const EdgeInsets.symmetric(vertical: 14),
-        ),
-        icon: const Icon(Icons.home, color: Colors.black),
-        label: const Text('Confirmar Llegada a Salvo', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+            icon: const Icon(Icons.check_circle, color: Colors.green),
+            label: Text(
+              isLeader ? 'Viaje Finalizado (Esperando Conductor)' : 'Llegada Confirmada',
+              style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            isLeader 
+              ? 'Has notificado la llegada del grupo. El conductor debe cerrar el viaje.' 
+              : 'Has notificado tu llegada. El conductor cerrará el viaje al finalizar el recorrido.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
+          ),
+        ],
       );
     }
+
+    // ESTADO ACTIVO
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ElevatedButton.icon(
+          onPressed: _isActionLoading ? null : () async {
+            // Buscamos el ID específico que el backend usa para esta relación (pasajero-viaje)
+            dynamic finalPassengerId = currentUserId;
+            if (tripPassengers != null) {
+              final meInTrip = tripPassengers.firstWhere(
+                (p) => (p['passengerId'] ?? p['studentId'] ?? p['id'] ?? '').toString() == currentUserId.toString(),
+                orElse: () => null,
+              );
+              // Prioridad: 1. ID de la relación (PK), 2. passengerId, 3. studentId
+              if (meInTrip != null) {
+                finalPassengerId = meInTrip['id'] ?? meInTrip['passengerId'] ?? meInTrip['studentId'] ?? currentUserId;
+              }
+            }
+
+            print('DEBUG: Senior Audit - Enviando confirmación. Trip: ${_currentTrip!['id']}, PassengerID Detectado: $finalPassengerId');
+            
+            context.read<RoutesBloc>().add(ConfirmArrivalEvent(
+              tripId: _currentTrip!['id'],
+              passengerId: finalPassengerId is int ? finalPassengerId : int.tryParse(finalPassengerId.toString()) ?? currentUserId,
+            ));
+          },
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.greenAccent,
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+          icon: Icon(isLeader ? Icons.flag : Icons.home, color: Colors.black),
+          label: Text(
+            isLeader ? 'Finalizar Viaje del Grupo' : 'Confirmar mi Llegada',
+            style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+          ),
+        ),
+      ],
+    );
   }
 }
+

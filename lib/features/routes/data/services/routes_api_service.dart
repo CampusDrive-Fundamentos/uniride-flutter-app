@@ -145,9 +145,19 @@ class RoutesApiService {
         'campus': _mapAppCampusToBackend(campus),
         'securityCode': securityCode,
         'totalAmount': totalAmount,
+        'price': totalAmount, // Aliases para asegurar que el backend reciba el precio
+        'totalPrice': totalAmount,
         'paymentMethod': 'CARD',
         'passengerIds': passengerIds,
       },
+    );
+  }
+
+  // NUEVO: Endpoint para cancelar el viaje desde el lado del estudiante lider
+  Future<Response> cancelTrip({required int tripId, required String reason}) async {
+    return await _dio.post(
+      '/api/v1/trips/$tripId/cancel',
+      data: {'reason': reason},
     );
   }
 }

@@ -36,7 +36,7 @@ abstract class RoutesRepository {
 
   Future<Either<Failure, BookingEntity>> lockBooking({required int bookingId});
 
-  Future<Either<Failure, BookingEntity>> leaveBooking({
+  Future<Either<Failure, void>> leaveBooking({
     required int bookingId,
     required double lat,
     required double lng,
@@ -62,5 +62,11 @@ abstract class RoutesRepository {
     required String securityCode,
     required double totalAmount,
     required List<int> passengerIds,
+  });
+
+  // NUEVO: Permite cancelar el viaje
+  Future<Either<Failure, void>> cancelTrip({
+    required int tripId,
+    required String reason,
   });
 }

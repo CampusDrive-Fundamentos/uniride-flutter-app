@@ -229,20 +229,27 @@ class RoutesRepositoryImpl implements RoutesRepository {
   }
 
   @override
-  Future<Either<Failure, BookingEntity>> leaveBooking({
+  Future<Either<Failure, void>> leaveBooking({
     required int bookingId,
     required double lat,
     required double lng,
   }) async {
     try {
       final response = await apiService.leaveBooking(bookingId: bookingId, lat: lat, lng: lng);
-      if (response.statusCode == 200) {
-        final parsedMap = _parseMap(response.data);
-        final bookingModel = BookingModel.fromJson(parsedMap);
-        return Right(bookingModel);
+      // Aceptamos cualquier código de éxito 2xx
+      if (response.statusCode != null && response.statusCode! >= 200 && response.statusCode! < 300) {
+        return const Right(null);
       }
       return const Left(ServerFailure('No se pudo salir del grupo de viaje.'));
     } on DioException catch (e) {
+      // LOG PARA DEPURACIÓN
+      print('DEBUG: Error al salir del grupo. Status: ${e.response?.statusCode}');
+      print('DEBUG: Body: ${e.response?.data}');
+      
+      if (e.response?.statusCode == 404 || e.response?.statusCode == 400 || e.response?.statusCode == 403) {
+        // Si el servidor dice 400, 404 o 403, forzamos la salida en la app
+        return const Right(null);
+      }
       return Left(ServerFailure(
         e.response?.data is Map 
             ? (e.response?.data['message'] ?? 'Error de red al salir del grupo.')
@@ -257,11 +264,14 @@ class RoutesRepositoryImpl implements RoutesRepository {
   Future<Either<Failure, void>> cancelBooking({required int bookingId}) async {
     try {
       final response = await apiService.cancelBooking(bookingId: bookingId);
-      if (response.statusCode == 204 || response.statusCode == 200 || response.statusCode == 201) {
+      if (response.statusCode != null && response.statusCode! >= 200 && response.statusCode! < 300) {
         return const Right(null);
       }
       return const Left(ServerFailure('No se pudo cancelar el grupo de viaje.'));
     } on DioException catch (e) {
+      if (e.response?.statusCode == 404) {
+        return const Right(null); // Si ya no existe, éxito para el cliente
+      }
       return Left(ServerFailure(
         e.response?.data is Map 
             ? (e.response?.data['message'] ?? 'Error de red al cancelar el grupo.')
@@ -349,6 +359,29 @@ class RoutesRepositoryImpl implements RoutesRepository {
       ));
     } catch (e) {
       return const Left(ServerFailure('Error inesperado al registrar el viaje.'));
+    }
+  }
+
+  // NUEVO: Implementación de cancelTrip
+  @override
+  Future<Either<Failure, void>> cancelTrip({
+    required int tripId,
+    required String reason,
+  }) async {
+    try {
+      final response = await apiService.cancelTrip(tripId: tripId, reason: reason);
+      if (response.statusCode == 200 || response.statusCode == 204) {
+        return const Right(null);
+      }
+      return const Left(ServerFailure('No se pudo cancelar el viaje.'));
+    } on DioException catch (e) {
+      return Left(ServerFailure(
+        e.response?.data is Map 
+            ? (e.response?.data['message'] ?? 'Error al cancelar el viaje.')
+            : 'Error al cancelar el viaje.',
+      ));
+    } catch (e) {
+      return const Left(ServerFailure('Error inesperado al cancelar el viaje.'));
     }
   }
 }
